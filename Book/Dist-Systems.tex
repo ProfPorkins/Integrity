@@ -1,0 +1,138 @@
+% Copyright © 2015 by James Dean Mathias
+% All Rights Reserved
+
+\documentclass[oneside, letterpapaer, openright]{book}
+
+\usepackage[margin=3cm]{geometry}
+
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{graphicx}
+\usepackage{mdframed}
+\usepackage{float}
+\usepackage{wallpaper}
+\usepackage{tkz-graph}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\usetikzlibrary{shapes.geometric}
+\usetikzlibrary{arrows}
+
+\newcommand{\FigureCode}{Listing }
+\lstnewenvironment{code}[1][] 
+{
+	%\minipage{\linewidth}
+	\renewcommand{\lstlistingname}{\FigureCode}
+	\lstset 
+	{
+		basicstyle=\small
+		language=C++,
+		backgroundcolor=\color{black!5}, % set backgroundcolor
+		basicstyle=\small,% basic font setting
+		showstringspaces=false,
+		moredelim=**[is][\bfseries]{```}{```},
+		%frame=single,
+		%captionpos=b % Place the caption on the bottom				
+		#1
+	}
+}
+{
+	%\endminipage
+}
+
+\newcommand{\FigureConsole}{Figure }
+\lstnewenvironment{console}[1][] 
+{
+	%\minipage{\linewidth}
+	\renewcommand{\lstlistingname}{\FigureConsole}
+	\lstset 
+	{
+		basicstyle=\small
+		backgroundcolor=\color{black!5}, % set backgroundcolor
+		basicstyle=\small,% basic font setting
+		showstringspaces=false,
+		#1
+	}
+}
+{
+	%\endminipage
+}
+
+\newcommand{\FigureGeneral}{Figure }
+\lstnewenvironment{general}[1][] 
+{
+	%\minipage{\linewidth}
+	\renewcommand{\lstlistingname}{\FigureGeneral}
+	\lstset 
+	{
+		basicstyle=\small
+		backgroundcolor=\color{black!5}, % set backgroundcolor
+		basicstyle=\small,% basic font setting
+		showstringspaces=false,
+		#1
+	}
+}
+{
+	%\endminipage
+}
+
+\DeclareCaptionFont{white}{\color{white}}
+\DeclareCaptionFormat{listing}{\colorbox{gray}{\parbox{\textwidth}{#1#2#3}}}
+\captionsetup[lstlisting]{format=listing,labelfont=white,textfont=white}
+
+%\title{Developing Scalable Systems Using C++11}
+%\title{A Practical Guide To Scalable Systems Using C++11}
+\title{Scalable, Distributed, \& Fault-Tolerant Systems Using C++11}
+\author{James Dean Mathias, Ph.D.}
+
+
+% This is the 'less is more' chapter heading style
+% Reference: http://texblog.org/2012/07/03/fancy-latex-chapter-styles/
+\usepackage[T1]{fontenc}
+\usepackage{color}
+\usepackage{titlesec}
+\definecolor{gray75}{gray}{0.75}
+\newcommand{\hsp}{\hspace{20pt}}
+\titleformat{\chapter}[hang]{\Huge\bfseries}{\thechapter\hsp\textcolor{gray75}{|}\hsp}{0pt}{\Huge\bfseries}
+
+\begin{document}
+
+	\ThisCenterWallPaper{1.0}{Images/MandelCover-3.png}
+	\maketitle
+	\clearpage
+	
+	\frontmatter
+	\tableofcontents
+	
+	\mainmatter
+	\include{Chapter-Overview}
+	\include{Chapter-Cpp11}
+	\include{Chapter-Scalable-TaskBased}
+	\include{Chapter-Scalable-Priority}
+	\include{Chapter-Scalable-DAG}
+	\include{Chapter-Networking}
+	\include{Chapter-Distributed-MessageCoding}
+	\include{Chapter-Distributed}
+	\include{Chapter-Distributed-FaultTolerant}
+	\include{Chapter-Distributed-FaultTolerant-DAG}
+	
+	% Next book or other additions
+	%  * Google Protocol Buffers
+	%  * Encryption
+	%  * Cancel tasks
+	%  * Reporting of task status - eliminating the need for an expected time to compute the result
+	%  * Reprioritize tasks
+	%  * Fully separate the networking stuff from the application code.
+	%   * Register and use callbacks to let app code know of results.
+	%  * Dynamically sized thread pool
+	
+
+	\appendix
+	\include{Appendix-MiscCode}
+	\include{Appendix-CMake}
+	\include{Appendix-Mandelbrot}
+
+	\backmatter
+
+\end{document}

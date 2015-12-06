@@ -1,0 +1,43 @@
+% Copyright © 2015 by James Dean Mathias
+% All Rights Reserved
+
+\chapter{Introduction to CMake}\label{appendix:cmake}
+
+All of the code samples provided as part of this book are developed as cross-platform C++ code (well, with the exception of some Windows client code) and utilize CMake\footnote{http://www.cmake.org} to generate project files. In recent years I have \textit{seen the light} and now fully embrace and use CMake for cross-platform development using C++. CMake is an open-source build system that works across a variety of platforms, including Windows, Linux, MacOS, and many others. The concept of CMake is that of defining a \textit{meta} project build description from which the CMake software can then generate native project files for build systems such as Visual Studio, Eclipse, or even good old fashioned makefiles.
+
+The purpose of this appendix is to help familiarize those new to CMake with enough information to understand how to generate native project files from the provided source code. To get up and running with the provided code samples, Section \ref{appendix:cmake:using} is enough. it describes how to use CMake to generate a native project for your preferred build system. For those interested in a deeper understanding of the syntax of the CMake configuration files, please visit the CMake web site at \href{http://www.cmake.org}{http://www.cmake.org}.
+
+\section{Using CMake}\label{appendix:cmake:using}
+
+The first step that needs to be accomplished is to download and install the CMake system to your computer. CMake is provided as both a command line and GUI-based utility. I'm a bit of a GUI person, therefore that is the general perspective this appendix provides, but everything described herein can be done from either the GUI or command line. For most users, it is enough to download and install from the installers provided on the CMake website. Alternatively, for Linux systems such as Ubuntu, using a package installer such as \texttt{apt} is recommended. When using a package installer it might be necessary to install both \texttt{cmake} and something like \texttt{cmake-qt-gui} (in the case of Ubuntu).
+
+\subsection{Generating Project Files}
+
+Inside each sample project folder is a file named, \texttt{CMakeLists.txt}. This file provides the instructions for CMake on how to generate native project files for your system. The rest of the files, usually \texttt{.cpp} and \texttt{.hpp} files, in the folder are the source files. The source files and the \texttt{CMakeLists.txt} are all that is needed to generate the project files.
+
+When using CMake it is important to keep the source files and the project files in separate folders. If you are used to something like Visual Studio where the project and source files are located in the same folder tree structure, this is a different approach. When CMake generates the build environment, it correctly generates links back to the source folder. Using the \texttt{RangedFor} example from the book, a possible approach to laying out a folder for the source and project files may look like the example if \FigureGeneral \ref{appendix:cmake:folder-layout}.
+
+\begin{general}[caption={Source and Build Folder Layout}, label=appendix:cmake:folder-layout]
+   /Chapter-Cpp11
+   /Chapter-Cpp11/RangedFor
+   /Chapter-Cpp11/Build
+   /Chapter-Cpp11/Build/RangedFor
+\end{general}
+
+The \texttt{CMakeLists.txt} file and the source files are all located in the \texttt{/Chapter\--Cpp11/RangedFor} folder. Following generation of the project files, they are located in the \texttt{/Chapter\--Cpp11/Build/RangedFor} folder.
+
+Use the following steps to generate the project file for your system, using the \texttt{RangedFor} example from \ref{chapter:cpp11}:
+
+\begin{description}
+  \item[Step 1] Start the CMake GUI application.
+  \item[Step 2] Select the \texttt{Browse Source\ldots} button.
+  \item[Step 3] Navigate to the \texttt{RangedFor} folder inside of the C++11 chapter source code.
+  \item[Step 4] Select the \texttt{Browse Build\ldots} button.
+  \item[Step 5] Navigate to a \textit{build} folder location.
+  \item[Step 6] Press the \texttt{Configure} button.
+  \item[Step 7] The first time \texttt{Configure} is pressed for a project, a dialog is presented asking for what type of generator to use for the project. Select the appropriate generator, such as \texttt{Visual Studio 12}.
+  \item[Step 8] Often times you'll need to press \texttt{Configure} again, due to some value(s) being displayed in red.
+  \item[Step 9] Press the \texttt{Generate} button. Following this step, the project files will now be created and placed in the build folder.
+\end{description}
+
+With the project files generated, it is now possible to build the code. In the case of generating a Visual Studio project navigate to the \texttt{/Build}, and appropriate sub-folder, then open the \texttt{.sln} file and build the solution. In the case of a Unix/Linux makefile, navigate to the \texttt{/Build}, and appropriate sub-folder, then type \texttt{make} to build the project.

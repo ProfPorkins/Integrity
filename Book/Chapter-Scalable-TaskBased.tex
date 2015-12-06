@@ -1,0 +1,585 @@
+% Copyright © 2015 by James Dean Mathias
+% All Rights Reserved
+
+\chapter{Scalability - Task-Based}\label{chapter:scalable-task-based}
+
+This chapter begins the discussion of designing and constructing scalable, distributed, and fault-tolerant applications. The first concept is that of taking a global application view of thread management. This is followed by introducing the computational task building block, and then the concept and role of a Thread Pool. The background discussion is then followed up with a detailed walkthrough of the implementation of the concepts along with an application that utilizes these building blocks.
+
+This chapter introduces the demonstration application used throughout the remainder of the book to help illustrate the topics presented. The application is an interactive Mandelbrot viewer, which allows the user to interactively zoom and pan over the Mandelbrot set. The reason for choosing it is that it has the kinds of computational features that make for a good demonstration. In particular, the computational complexity for each pixel varies widely over an image, helping provide a good demonstration for how breaking a large computational task into smaller ones creates the kind of automatic load balancing necessary for a scalable application. Additionally, the amount of computing is easy to configure by changing the size of the display or the maximum number of iterations used in the equation.  Finally, the rendering of the Mandelbrot set is visually pleasing, helping engage the interest of the user. For more details regarding the Mandelbrot set, refer to Appendix \ref{appendix:mandelbrot}.
+
+The fundamental scalability concepts are presented in Section \ref{chapter:scalable:concepts}. Following the concept presentation, implementations of the concepts is presented in Section \ref{chapter:scalable:building-blocks}. Finally, the application walkthrough begins in Section \ref{chapter:scalable:app-demo}.
+
+\section{Concepts}\label{chapter:scalable:concepts}
+
+Designing and building scalable applications is not that difficult conceptually, the hard work is in the details of the specific application domain and how to apply the concepts to the domain. Therefore, the appropriate starting point is to understand the conceptual scalable building blocks; it is only from this basis that a specific application can be constructed. Any scalable application begins with these concepts, building upon them to provide the computational services for an application purpose.
+
+\subsection{Thread Management}\label{chapter:scalable:concepts:thread-management}
+
+Effective thread management is essential to any scalable application. Most developers know how to create threads well enough, but what isn't as well understood is how to utilize threads in a way that dynamically scales to fully utilize the system's capabilities. In order to achieve effective scalability through thread utilization, an application must be designed with a \textit{global view} of thread management versus a \textit{local view}.  What does that mean?
+
+During the design of an application using a local view, a developer identifies a problem that is solved through the use of thread-level parallelism. The developer creates the necessary threads for that problem and moves on. Over time, as an application is built using this approach, various sub-systems, when taken in isolation (locally), all solve a problem using some number of threads. However, when viewed together (globally), these sub-systems result in a large number of system threads, all of which are competing for limited CPU resources, resulting in thread contention and lowering overall system utilization as threads compete, rather than cooperate, for limited system resources.
+
+An application developed using a global view identifies the CPU as an application resource to share among all sub-systems. This shared resource is commonly exposed and managed through a \textit{Thread Pool}; Section \ref{chapter:scalable:concepts:thread-pool} discusses Thread Pools in detail. As a developer identifies problems that can take advantage of thread-level parallelism, the Thread Pool is used. Over time, as this application is built and different sub-systems request threads from the Thread Pool, they are effectively managed without overwhelming the system's resources, resulting in an efficient and scalable system.
+
+The system built using a local view may result in hundreds of threads, all competing for the same CPU and other hardware resources, and little chance for true scalability. The system built using a global view will result in a system that coordinates the threads over all the application sub-systems through the use of a Thread Pool. The Thread Pool dynamically matches the number of threads to the available system resources, allowing the whole application to scale and fully utilize the available hardware resources.
+
+\subsection{Tasks}\label{chapter:scalable:tasks}
+
+The fundamental building block of a scalable application is a \textit{task}. A task is a combination of code and data, where the code operates over the data. Furthermore, each task must be able to be computed in parallel with other tasks.
+
+An application must subdivide its operation into tasks, with different types of tasks having different code and data. These tasks are then distributed to available threads for computation. As soon as a thread is available, it is matched with a task, executes the code over the data, returns a result, is then matched with the next task, etc. Because each task is computed independently, the number of tasks that can be computed in parallel scales with the number of available CPU cores. It is this concept and capability that forms the basis for all scalable computation presented in this chapter and throughout the book.
+
+The data associated with a task ideally should not be shared by another task which is being computed in parallel, for reasons of correctness and scalability. With respect to correctness, if the same memory location is being read and written concurrently, this can lead to a race condition. To avoid these race conditions, the data must be synchronized via mutexes, locks, critical sections, or other similar techniques. With respect to scalability, if the same data is being accessed in parallel with proper synchronization, this may lead to linearizing task execution, resulting in a system that will not scale. Careful design and planning must be taken in order to construct tasks that will compute in parallel and scale as more computing resources become available.
+
+This chapter handles dependencies between tasks in a simple manner, all tasks are computed in the order they are generated. Chapter \ref{chapter:scalable-priority} explores tasks in the context of varying priorities among the tasks, and Chapter \ref{chapter:scalable-dag} explores the topic of dependencies existing between tasks, enforcing that some tasks must complete before others can begin.
+
+\subsection{Thread Pool}\label{chapter:scalable:concepts:thread-pool}
+
+A \textit{Thread Pool} is a resource where a managed set of threads are matched with incoming tasks. The purpose of the thread pool is to manage the number of threads created by an application, in order to properly scale and fully utilize the system, while not overwhelming the system resources. In addition to the benefit of being able to manage threads for scalability, it is more efficient to reuse existing threads rather than creating new threads, thereby offering an important thread utilization optimization.
+
+Thread pools usually start with some small fixed number of threads created at application startup, and then dynamically adjust the number of threads, up to some specified maximum. The number of threads in the thread pool can increase or decrease based upon application utilization. The thread pool can monitor the wait times of the incoming tasks, along with the wait time of threads. If the wait time of tasks is increasing, additional threads, up to the maximum allowed, are created. If the wait time of available threads is decreasing, threads can be destroyed, down to a minimum threshold.
+
+Two data structures are used to compose a thread pool, one for the threads and another for tasks. Threads are placed into a \textit{set} or similar container, simply as a way to track them for the lifetime of the application. Each thread in the pool waits in an efficient state until it is signaled that a new task is available to execute. Incoming tasks are placed into a first in first out (FIFO), and matched up with the a waiting thread, with the task being removed from the FIFO queueu upon being matched with a thread. As a thread complete work on a task, it first checks to see if another task is available. If another task is available, it is immediately taken and executed, otherwise the thread returns to an efficient waiting state, again, waiting to be signaled another task has become available. In the case there are tasks in the task queue, but no available threads, the task queue continues to fill, until threads become available for matching with tasks.
+
+There is no single, or simple, answer to the question of how many threads at a minimum and maximum to create. The short answer is that it depends upon the application. A longer answer is to remember that a computing system is composed of more than just a CPU, there are many hardware components that can work in parallel. These components include the CPU, GPU, network devices, and storage devices; all of these devices can and should be utilized to work in parallel.
+
+At a minimum the thread pool should have at least as many threads as CPU cores. The maximum number is a little more complex, and not that easy to decide. Depending upon the mix of tasks an application generates helps guide this decision. An application that is almost completely computational doesn't need many more threads than the number of CPU cores. On the other hand, an application that has a mix of computational and IO tasks will benefit from having a larger upper limit. The final answer is that the only way to know is to try different levels and measure the performance of the application.
+
+An application has a single thread pool, it provides the global view of thread management for the application. It is assumed the application using the thread pool is the only one running on the system that is trying to maximize utilization. In the case this isn't true, that there are several applications wanting to share system resources, the applications should look to the underlying operating system (e.g. Windows) for a shared thread pool resource.
+
+\section{Building Blocks}\label{chapter:scalable:building-blocks}
+
+This section of the chapter walks through the implementation of the the building block concepts of the Task and Thread Pool.  The next section, Section \ref{chapter:scalable:app-demo} demonstrates the use of these building blocks in the context of a real application, an interactive Mandelbrot visualization application.
+
+\subsection{Task}\label{chapter:scalable:impl:task}
+
+As described in Section \ref{chapter:scalable:tasks}, a task is the fundamental building block for any computational component. Looking forward just a bit towards the thread pool, it is necessary to allow any type of task to be handled by the thread pool. With this in mind, an abstraction of a task is necessary, one that allows any task to be accepted by the thread pool and when ready, have its computation performed. In C++ terms, this means defining an abstract base class from which all concrete tasks are derived; the name for this class is \texttt{Task}.
+
+The abstract base class \texttt{Task} defines the behavior that all derived tasks must implement. The first behavior is the computational task for which the task is defined, the method name for this behavior is \texttt{execute}. Because the \texttt{Task} class can not possibly know anything about the computation, it is a pure virtual method, which causes the class to be abstract. The next behavior necessary is to provide a means through which some other application component can be informed when the task computation is complete. This is accomplished through a combination of taking a \texttt{std::function} through the \texttt{Task} constructor and invoking that function in the \texttt{complete} method. The \texttt{Task} class is shown in \FigureCode \ref{chapter:scalable:task:task-class}.
+
+\begin{code}[caption={Abstract Task Class}, label=chapter:scalable:task:task-class]
+class Task
+{
+public:
+  Task(std::function<void ()> onComplete) :
+    m_onComplete(onComplete)
+  {
+  }
+  virtual ~Task() {}
+
+  virtual void execute() = 0;
+  void complete() { if (m_onComplete) { m_onComplete(); } }
+
+private:
+  std::function<void ()> m_onComplete;
+};
+\end{code}
+
+At first glance it may seem odd that the \texttt{complete} method isn't virtual or abstract, why not allow the derived task classes to have custom behavior when the task is complete? The reason is that we want to allow code other than the task itself to be informed of the completion, which is why the \texttt{Task} constructor accepts an \texttt{onComplete} function. With that said it is often meaningful for the task itself to perform some additional work following the completion of the \texttt{execute} function. Chapter \ref{chapter:dist} discusses this and demonstrates an approach to effectively solving this problem.
+
+It is worth noting the destructor for the \texttt{Task} class is declared as \texttt{virtual}. This is to ensure that derived class destructors are correctly called.
+
+\subsection{Thread Pool}\label{chapter:scalable:impl:thread-pool}
+
+The thread pool, discussed in Section \ref{chapter:scalable:concepts:thread-pool}, is the heart of the scalability framework. Conceptually a thread pool is composed of a set of available threads and a queue of available tasks. Surprisingly, the amount of code necessary to build this core system is relatively modest. The implementation associated with this chapter is less than 300 lines of code, with more than half of those comments and other boilerplate code such as \texttt{\#include}s. This is possible, in part, due to the concise code possible using C++11.
+
+Because the thread pool is a resource that needs to be available throughout an application, it is implemented as a Singleton\footnote{http://en.wikipedia.org/wiki/Singleton\_pattern}. The first time the \texttt{ThreadPool} class \texttt{instance} member is invoked, the initial pool of threads is created. This implementation creates four plus the number of available CPU cores, that number does not change throughout the lifetime of the thread pool. The reason for the four extra threads is to ensure computational work can be performed while dealing with the various bits of overhead naturally incurred during signaling threads and matching them with tasks.
+
+The declaration of the \texttt{ThreadPool} class is provided in \FigureCode \ref{chapter:scalable:thread-pool:declaration}. The singleton implementation is visible by the static \texttt{instance} accessor method, the protected constructor, and the \texttt{m\_instance} member.
+
+\begin{code}[caption={\texttt{ThreadPool} Declaration}, label=chapter:scalable:thread-pool:declaration]
+class ThreadPool
+{
+public:
+  static std::shared_ptr<ThreadPool> instance();
+  static void terminate();
+
+  void enqueueTask(std::shared_ptr<Task> task);
+
+protected:
+  ThreadPool(uint16_t sizeInitial);
+
+private:
+  static std::shared_ptr<ThreadPool> m_instance;
+
+  std::set<std::shared_ptr<WorkerThread>> m_threads;
+
+  ConcurrentQueue<std::shared_ptr<Task>> m_taskQueue;
+  std::condition_variable m_eventQueue;
+};
+\end{code}
+
+The thread pool is a simple \texttt{std::set} of \texttt{WorkerThread} pointers. The container is a \texttt{std::set} because threads are only added at startup and then nothing is removed or added during the remaining lifetime of the thread pool. The reason threads don't come and go in this container is that the \texttt{WorkerThread}s all receive a reference to the task queue and pull tasks from that queue as they become available.
+
+The task queue is given by the \texttt{m\_taskQueue} member, a thread safe queue of pointers to tasks. The thread safe queue is provided by a class called \texttt{ConcurrentQueue}; Section \ref{chapter:scalable:impl:task-queue} details the implementation of this queue.
+
+Associated with this queue is a \texttt{std::condition\_variable} named \texttt{m\_eventQueue}. This condition variable is signaled each time a task is added to the task queue. All worker threads are given a reference to this condition variable. When a task is added, the condition variable is signaled using the \texttt{.notify\_one} method. This ensures that only one waiting (if available) thread receives the signal, falls through, and attempts to obtain a task from the shared task queue. This is the preferred behavior, ensuring only a single worker thread unblocks on the event, rather than having all waiting threads unblock and create unnecessary contention on the task queue as they all attempt to grab the newly available task.
+
+The only behavior exposed by the \texttt{ThreadPool} class is the ability to add a task, through the \texttt{enqueueTask} method. The code for enqueuing a task is very simple, as shown in \FigureCode \ref{chapter:scalable:thread-pool:enqueue}. The task is added to the private task queue and the associated condition variable \texttt{m\_eventTaskQueue} is signaled.
+
+\begin{code}[caption={Enqueuing a Task}, label=chapter:scalable:thread-pool:enqueue]
+void ThreadPool::enqueueTask(std::shared_ptr<Task> task)
+{
+  m_taskQueue.enqueue(task);
+  m_eventTaskQueue.notify_one();
+}
+\end{code}
+
+Although this code is simple, more is happening than is seen at first glance. The member \texttt{m\_taskQueue} is thread safe, ensuring that only one thread at a time is adding a task. Secondly, when \texttt{m\_eventTaskQueue} is signaled, it (potentially) causes a waiting thread to fall through and begin work on the newly added task.
+
+The final part of the \texttt{ThreadPool} singleton is a static \texttt{terminate} method; the code for this method is shown in \FigureCode \ref{chapter:scalable:thread-pool:terminate}. The purpose of this method is to perform a graceful shutdown of the worker threads. The first step is to ask each of the worker threads to voluntarily terminate as soon as they are finished with their current task. Not all threads may be working on a task, they may be waiting on the task notification event. For those threads the task queue condition variable is signaled with a \texttt{notify\_all}, causing all threads waiting on that condition variable to unblock and find out they need to terminate. Finally, the method waits to return until all worker threads have completed by performing a \texttt{join} on them.
+
+\begin{code}[caption={Thread Pool Terminate}, label=chapter:scalable:thread-pool:terminate]
+void ThreadPool::terminate()
+{
+  if (m_instance != nullptr)
+  {
+    for (auto thread : m_instance->m_threads)
+    {
+      thread->terminate();
+    }
+
+    m_instance->m_eventTaskQueue.notify_all();
+
+    for (auto thread : m_instance->m_threads)
+    {
+      thread->join();
+    }
+
+    m_instance.reset();
+    m_instance = nullptr;
+  }
+}
+\end{code}
+
+\subsubsection{Task Queue}\label{chapter:scalable:impl:task-queue}
+
+The queue used to hold the tasks is a lightweight wrapper around the \texttt{std::queue}. The name of the class is \texttt{ConcurrentQueue} and provides synchronized access through the \texttt{enqueue} and \texttt{dequeue} class members. \texttt{ConcurrentQueue} is a template class, allowing any data type to be used; a \texttt{Task} in the case of the Mandelbrot application. The declaration of the class is found in \FigureCode \ref{chapter:scalable:task-queue:declaration}. The implementations of the \texttt{enqueue} and \texttt{dequeue} show in \FigureCode \ref{chapter:scalable:task-queue:enqueue} and \FigureCode \ref{chapter:scalable:task-queue:dequeue} respectively.
+
+\begin{code}[caption={\texttt{ConcurrentQueue} Declaration}, label=chapter:scalable:task-queue:declaration]
+template <typename T>
+class ConcurrentQueue
+{
+public:
+  void enqueue(const T& val) { ... }
+  bool dequeue(T& item) { ... }
+
+private:
+  std::queue<T> m_queue;
+  std::mutex m_mutex;
+};
+\end{code}
+
+The \texttt{ConcurrentQueue} is composed of a \texttt{std::queue}, which is the container for the tasks, and a \texttt{std::mutex}, which is used to support synchornized access. Rather than presenting the same interface as \texttt{std::queue}, this class provides only the ability to add a new item to the queue or remove an item from the queue. These two methods provide all the capability required by the scalable application.
+
+The code for the \texttt{enqueue} method is found in \FigureCode \ref{chapter:scalable:task-queue:enqueue}. The first line of code locks on the mutex. If the mutex is not available, the calling thread is blocked until the mutex becomes available. Once the lock is obtained, the item is added to the queue. When the method goes out of scope, the mutex lock is released. Using a lock in this way is the correct RAII approach, versus making specific calls to \texttt{lock} and \texttt{unlock} on the mutex.
+
+\begin{code}[caption={Add Item to \texttt{ConcurrentQueue}}, label=chapter:scalable:task-queue:enqueue]
+void enqueue(const T& item)
+{
+  std::lock_guard<std::mutex> lock(m_mutex);
+  m_queue.push(item);
+}
+\end{code}
+
+The code for the \texttt{dequeue} method is found in \FigureCode \ref{chapter:scalable:task-queue:dequeue}. In the same way as the \texttt{enqueue} method, this method blocks until the calling thread is able obtain a lock on the mutex. The interesting approach in this method is that it returns a boolean \texttt{true} or \texttt{false} depending upon whether or not an item was returned in the reference parameter. The reason for this is to allow a calling thread do something different based upon whether or not there is any work to do.
+
+\begin{code}[caption={Remove Item from \texttt{ConcurrentQueue}}, label=chapter:scalable:task-queue:dequeue]
+bool dequeue(T& item)
+{
+  std::lock_guard<std::mutex> lock(m_mutex);
+
+  bool success = false;
+  if (!m_queue.empty())
+  {
+    item = m_queue.front();
+    m_queue.pop();
+    success = true;
+  }
+
+  return success;
+}
+\end{code}
+
+\subsubsection{Worker Thread}\label{chapter:scalable:impl:worker-thread}
+
+The threads associated with the thread pool require a specific implementation. The core logic of these threads is to watch the task queue and grab the next available task. Clearly, because there is more than one thread, the threads must coordinate retrieving tasks from the task queue. This is performed in two ways. The most obvious way is through standard synchronization techniques, i.e. locking while accessing the shared task queue. The second way is through the use of a condition variable. All threads go into an efficient wait state, waiting to be signaled by the condition variable. When a new task is added to the task queue, only one thread is signaled. Having only one thread signaled reduces contention on the task queue by preventing unnecessary locking by a large number of threads, only one of which is going to obtain the next task.
+
+The declaration for the \texttt{WorkerThread} class is shown in \FigureCode \ref{chapter:scalable:worker-thread}. The constructor accepts references to the task queue and the task notification condition variable. Internally, the thread class maintains a pointer to its own C++11 thread object, along with a boolean \texttt{m\_done} that indicate whether or not the thread should voluntarily terminate. The \texttt{m\_mutexEventTaskQueue} is defined as a \texttt{static} to ensure only a single mutex instance is used across all \texttt{WorkerThread}s. The reason for this is that all \texttt{condition\_variable}s must use the same mutex in order to be correctly signaled when one of their \texttt{notify} methods is called.
+
+\begin{code}[caption={\texttt{WorkerThread} Declaration}, label=chapter:scalable:worker-thread]
+class WorkerThread
+{
+public:
+  WorkerThread(
+    ConcurrentQueue<std::shared_ptr<Task>>& taskQueue, 
+      std::condition_variable& eventTaskQueue);
+
+  void terminate();
+  void join();
+
+private:
+  std::unique_ptr<std::thread> m_thread;
+  bool m_done;
+
+  ConcurrentQueue<std::shared_ptr<Task>>& m_taskQueue;
+  std::condition_variable& m_eventTaskQueue;
+  static std::mutex m_mutexEventTaskQueue;
+
+  void run();
+};
+\end{code}
+
+As soon as an instance of the \texttt{WorkerThread} class is created, it begins execution of a thread, beginning with its private \texttt{run} method. The constructor consists of a single line of code that creates and kicks off the execution of the thread, as seen in \FigureCode \ref{chapter:scalable:worker-thread:constructor}. The reason a \texttt{unique\_ptr} is used is because the class itself is the only code that will ever have a pointer to the thread, therefore no need to use a \texttt{shared\_ptr}.
+
+\begin{code}[caption={\texttt{WorkerThread} Constructor}, label=chapter:scalable:worker-thread:constructor]
+WorkerThread::WorkerThread(
+    ConcurrentQueue<std::shared_ptr<Task>>& taskQueue, 
+    std::condition_variable& eventTaskQueue) :
+  m_taskQueue(taskQueue),
+  m_eventTaskQueue(eventTaskQueue),
+  m_done(false),
+  m_thread(nullptr)
+{
+  m_thread = std::unique_ptr<std::thread>(
+    new std::thread(&WorkerThread::run, this));
+}
+\end{code}
+
+The internal thread code, shown in \FigureCode \ref{chapter:scalable:worker-thread:run}, executes a fairly simple loop. The body of the loop checks the task queue for an available task. If one is available, its two methods \texttt{execute} and \texttt{complete} are performed in sequence. After completion of these two methods, the task queue is checked again. When no task is available, the thread goes into an efficient wait state, waiting until the condition variable \texttt{m\_eventTaskQueue} associated with the task queue is signaled. The \texttt{run} method stays in its loop until asked to voluntarily terminate, which occurs when \texttt{m\_done} is set to \texttt{true}.
+
+\begin{code}[caption={\texttt{WorkerThread::run} Method}, label=chapter:scalable:worker-thread:run]
+void WorkerThread::run()
+{
+  while (!m_done)
+  {
+    std::shared_ptr<Task> task;
+    if (m_taskQueue.dequeue(task))
+    {
+      task->execute();
+      task->complete();
+    }
+    else
+    {
+      std::unique_lock<std::mutex> lock(m_mutexEventTaskQueue);
+      m_eventTaskQueue.wait(lock);
+    }
+  }
+}
+\end{code}
+
+Remember that the \texttt{execute} method of the task is the code from the derived task. On the other hand, while the code for the \texttt{complete} method is common to all tasks, it also executes in the context of the thread. Therefore, the function called by the \texttt{complete} method should be relatively short, otherwise the task thread will be working on non-computational code.
+
+The public interface to the \texttt{WorkerThread} consists of two simple methods, \texttt{terminate} and \texttt{join}. The purpose of the \texttt{terminate} method is to signal to the thread it should voluntarily terminate as soon as possible. The join method is only a pass-through to the underlying thread \texttt{join} method. The code for these methods is found in \FigureCode \ref{chapter:scalable:worker-thread:terminate} and \FigureCode \ref{chapter:scalable:worker-thread:join} respectively.
+
+\begin{code}[caption={\texttt{ConcurrentQueue::terminate} Method}, label=chapter:scalable:worker-thread:terminate]
+void WorkerThread::terminate()
+{
+  m_done = true;
+}
+\end{code}
+
+\begin{code}[caption={\texttt{ConcurrentQueue::join} Method}, label=chapter:scalable:worker-thread:join]
+void WorkerThread::join()
+{
+  m_thread->join();
+}
+\end{code}
+
+\section{Scalable Mandelbrot Viewer}\label{chapter:scalable:app-demo}
+
+The fairly simple pieces of code presented in the first part of this chapter work to create an efficient, loading balancing, and scalable framework, but require an application to take on meaning. The remainder of this chapter shows how to take the scalable framework and utilize it in the context of an interactive Mandelbrot viewer application. To further demonstrate the generic nature and scalability of the underlying framework, the application also computes prime numbers while also computing the Mandelbrot set. As the application changes to match the framework throughout the rest of the book, the prime number computatation is carried forward, showing how the evolution of the framework continues to work naturally with different kinds of tasks.
+
+As noted in the first part of this chapter, the Mandelbrot set works as a good demonstration because of the asymmetric nature of the comptational complexity of each pixel in the resulting image. In other words, the number of instructions it takes to compute the result for each pixel typically varies widely. Appendix \ref{appendix:mandelbrot} provides a more in-depth discussion of the mathematics, computational code, and visualization. If you are unfamiliar with the Mandelbrot set, please review the appendix before continuing with this chapter.
+
+Upon startup the application shows an overview of the Mandelbrot set, initially a mostly blue region outlined by some red hints. The blue region contains the points considered to be inside the set, anything else is outside. The remaining points are represented as colors other than blue, based upon how many iterations it took to decide they are outside of the set. At this point, you can interact with the viewer by panning and zooming throughout the set. Take the time to explore the set, if you've not experienced it before, it is possible to find any number of interesting and beautiful regions. The panning and zooming controls are:
+
+\begin{description}
+  {\setlength\itemindent{15pt} \item[pan up] : w or up arrow}
+  {\setlength\itemindent{15pt} \item[pan down] : s or down arrow}
+  {\setlength\itemindent{15pt} \item[pan left] : a or left arrow}
+  {\setlength\itemindent{15pt} \item[pan right] : d or right arrow} 
+  {\setlength\itemindent{15pt} \item[zoom in] : q or numpad +}
+  {\setlength\itemindent{15pt} \item[zoom out] : e or numpad -}
+\end{description}
+
+Behind the Mandelbrot visualization is a console window showing a series of increasing numbers scrolling by, these are prime numbers. In addition to the Mandelbrot set computation, the application is also computing prime numbers. The purpose for this is to demonstrate the general nature of the scalable framework, the ability to mix different tasks at the same time, along with showing how easy it is to define different kinds of computational tasks.
+
+\subsection{Application Source}\label{chapter:scalable:app-demo:source}
+
+There are three parts that compose the application source. The first is the Windows specific startup and message loop, followed by the Mandelbrot (and prime number) framework and computational logic, the last part is the task-based scalable framework. The following identifies the source files associated with each of these sections:
+
+\begin{description}
+	\item[Windows Support] \hfill \\
+		\texttt{WinMain.cpp}
+	\item[Mandelbrot Framework] \hfill \\
+		\texttt{IRange.hpp} \\
+		\texttt{Mandelbrot.hpp} \\
+		\texttt{Mandelbrot.cpp} \\
+		\texttt{MandelImageTask.hpp} \\
+		\texttt{MandelImageTask.cpp} \\
+		\texttt{MandelPartTask.hpp} \\
+		\texttt{MandelPartTask.cpp} \\
+		\texttt{NextPrimeTask.hpp} \\
+		\texttt{NextPrimeTask.cpp} \\
+		\texttt{ScalabilityApp.hpp} \\
+		\texttt{ScalabilityApp.cpp}
+	\item[Scalable Framework] \hfill \\
+		\texttt{ConcurrentQueue.hpp} \\
+		\texttt{Task.hpp} \\
+		\texttt{ThreadPool.hpp} \\
+		\texttt{ThreadPool.cpp} \\
+		\texttt{WorkerThread.hpp} \\
+		\texttt{WorkerThread.cpp}
+\end{description}
+
+The file \texttt{WinMain.cpp} provides the Windows specific application framework. This includes creating the Mandelbrot viewing window, the prime number console window, and the core message loop. This file contains the code to capture keyboard input and feed that back into the Mandelbrot viewing controls. Finally, this file creates and holds a shared pointer to a \texttt{ScalabilityApp} class.
+
+The core application logic is contained within the \texttt{ScalabilityApp} class and the supporting \texttt{Mandelbrot}, \texttt{MandelImageTask}, \texttt{MandelPartTask}, and \texttt{NextPrimeTask} classes. These are all detailed in Section \ref{chapter:scalable:app-demo:app-logic}. As already described in the first part of this chapter, the underlying scalable framework is provided by the \texttt{ConcurrentQueue}, \texttt{Task}, \texttt{ThreadPool}, and \texttt{WorkerThread} classes.
+
+\subsection{Application Logic}\label{chapter:scalable:app-demo:app-logic}
+
+The Mandelbrot application is based around the Windows message loop. The message loop runs by processing operating system messages as fast as possible. Each time through this loop the Mandelbrot viewer is updated by calling the \texttt{pulse} method of the \texttt{ScalabilityApp} class. Keyboard input is captured during the message loop through the \texttt{WinMessageHandler} function.
+
+\subsubsection{Startup}
+
+The \texttt{ScalabilityApp} constructor sets the \texttt{m\_updateRequired} variable to \texttt{true}, indicating the next time through the \texttt{pulse} method a new view of the Mandelbrot set needs computed, and sets \texttt{m\_inUpdate} to \texttt{false}, indicating the appplication is not currently computing a Mandelbrot set view. Additionally, the constructor sets the \texttt{m\_currentPrime} variable to \texttt{1} and calls the \texttt{startNextPrime} method to kick off the background prime number generation.
+
+The \texttt{startNextPrime} method creates a \texttt{NextPrimeTask} and places it on the \texttt{ThreadPool} task queue. A small lambda is passed in as the function to call on completion of the prime number computation task. This lamba calls the \texttt{startNextPrime} method, which causes the next prime number to be computed, creating an infinite prime number computation loop.
+
+\subsubsection{Keyboard Input}
+
+Each time an application supported key is pressed, a call is made into the \texttt{Mandelbrot} that adjusts the viewing parameters for the next time the Mandelbrot set is computed. An example of one of these methods is shown in \FigureCode \ref{chapter:scalable:app-demo:moveleft}.
+
+\begin{code}[caption={\texttt{ScalableApp::moveLeft} Method}, label=chapter:scalable:app-demo:moveleft]
+void Mandelbrot::moveLeft()
+{
+  double distance = (m_mandelRight - m_mandelLeft) * MOVEMENT_RATE;
+  m_mandelLeft -= distance;
+  m_mandelRight -= distance;
+  m_updateRequired = true;
+}
+\end{code}
+
+The first part of the method updates the viewing parameters, while the last statement, \texttt{m\_updateRequired = true;} works as a signal to indicate that a new viewing frame needs to be computed. This ensures the application only computes a new Mandelbrot set when the viewing parameters have changed. Furthermore, because the user may press multiple keys while the current frame is being rendered, this allows multiple view adjustments to be accepted and combined into the next frame computation.
+
+\subsection{Task Decomposition}\label{chapter:scalable:app-demo:task-decomposition}
+
+As noted in Section \ref{chapter:scalable:tasks}, tasks are the fundamental building block for a scalable application. Defining these tasks is known as \textit{Task Decomposition}. The demonstration application easily decomposes into two tasks, one for computing the Mandelbrot set and another to compute prime numbers. While the prime number computation makes sense as a small unit of work, computing an entire Mandelbrot set as a single task is too much work, more importantly it provides no ability to scale over more than one processor. Therefore, a closer look at the Mandelbrot task decomposition is in order.
+
+In order to decide how to decompose the Mandelbrot image into sub-tasks, the nature of the Mandelbrot computation and understanding of how to optimize are necessary; a general truism for any task decomposition effort. With respect to the Mandelbrot set, each pixel computation is independent of every other pixel. Therefore, it is possible to decompose the tasks down to the individual pixel level. Additionally, the computational complexity of each pixel (potentially) differs widely. One pixel may take 1 iteration, another may take the application defined maximum (e.g., 1000 iterations). With respect to system optimization, batching many operations together is typically more efficient. This is especially true when considering the overhead involved in creating an instance of a task, adding it to the thread pool, matching it with an available thread, executing, and then completing the task.
+
+Taking into consideration the nature of the Mandelbrot pixel computations and thinking about system optimization, it makes sense to define the small unit of computation as multiple pixels per task. Specifically, I have chosen to define each task as one row of pixels in the image. This selection was made from a combination of trying out different numbers of pixels, along with thinking about creating a large enough number of tasks to ensure the comptuation will scale well with an increasing number of CPU cores. Too few tasks, such as 6, won't scale beyond 6 CPU cores, whereas too many tasks, such as 10,000, incurs too much overhead from the tasking framework.
+
+One issue that needs to be solved is ensuring the application doesn't try to start a new Mandelbrot image computation until the previous one has completed. The reason this is desired is to prevent cueuing up multiple images, each caused by a single keypress. Instead, it is better to allow multiple keypresses to take place while an image is being computed, accumulate all those changes, then request a new image only when the current one has completed. The framework presented in this chapter isn't capable defining dependencies between tasks, that comes in Chapter \ref{chapter:scalable-dag}. Therefore, some other technique is necessary.
+
+The approach taken in this chapter is to define a master Mandelbrot image task (\texttt{MandelImageTask}), and have that task spawn sub-image for each of the rows in the image. The application creates the \texttt{MandelImageTask} and places it on the task queue, and also sets the \texttt{m\_inUpdate} flag to \texttt{true}, which prevents any additional \texttt{MandelImageTask}s from being created. \texttt{MandelImageTask} creates tasks for each of the rows and places those on the task queue. Rather than having \texttt{MandelImageTask} complete after placing the sub-image tasks on the task queue, it waits for all of those tasks to complete first. Once all of the sub-image tasks are complete, \texttt{MandelImageTask} finishes, which results in the application being notified of this completion. When the \texttt{MandelImageTask} completes, \texttt{m\_inUpdate} is set back to \texttt{false}, which allows a new \texttt{MandelImageTask} to be created. In this way, it is possible to create a dependency between tasks, a master task doesn't complete until child tasks it spawns complete.
+
+\subsubsection{Prime Number Task}\label{chapter:scalable:app-demo:task-prime}
+
+The \texttt{NextPrimeTask} is a good place to start, as it is about the simplest kind of task to create. \FigureCode \ref{chapter:scalable:app-demo:nextprimetask} shows the declaration of the class. The task is derived from the abstract base class \texttt{Task}, providing a custom constructor and implementing the pure virtual \texttt{execute} method.
+
+\begin{code}[caption={\texttt{NextPrimeTask} Declaration}, label=chapter:scalable:app-demo:nextprimetask]
+class NextPrimeTask : public Task
+{
+public:
+  NextPrimeTask(
+    uint32_t lastPrime, 
+    uint32_t& nextPrime, 
+    std::function<void ()> onComplete);
+
+  virtual void execute();
+
+private:
+  uint32_t m_lastPrime;
+  uint32_t& m_nextPrime;
+
+  bool isPrime(uint32_t value);
+};
+\end{code}
+
+The \texttt{NextPrimeTask} constructor, show in \FigureCode \ref{chapter:scalable:app-demo:nextprimetask:constructor}, calls into the base \texttt{Task} constructor, passing the \texttt{onComplete} function into it. Additionally, the \texttt{lastPrime} and \texttt{nextPrime} parameters are assigned to their corresponding member variables. The \texttt{nextPrime} parameter is passed by reference, allowing the task to set the value during the \texttt{execute} method. When the task is complete, the source variable is updated with the newly computed prime number. Doing this requires a bit of careful thought, as it doesn't seem like the right thing to do in a multi-threaded application. What makes this work out correctly is that there can only be one \texttt{NextPrimeTask} ever executing at one time. Because of this, no reason to worry about synchronizing the \texttt{nextPrime} value between multiple threads, it can never happen.
+
+\begin{code}[caption={\texttt{NextPrimeTask} Constructor}, label=chapter:scalable:app-demo:nextprimetask:constructor]
+NextPrimeTask::NextPrimeTask(
+      uint32_t lastPrime, 
+      uint32_t& nextPrime, 
+      std::function<void ()> onComplete) :
+  Task(onComplete),
+  m_lastPrime(lastPrime),
+  m_nextPrime(nextPrime)
+{
+}
+\end{code}
+
+The \texttt{execute} method for the task is shown in \FigureCode \ref{chapter:scalable:app-demo:nextprimetask:execute}. This method simply computes the next prime number in the series. The purpose of this method isn't a fast technique, it is just a way to compute prime numbers for demonstration.
+
+\begin{code}[caption={\texttt{NextPrimeTask::execute} Method}, label=chapter:scalable:app-demo:nextprimetask:execute]
+void NextPrimeTask::execute()
+{
+  m_nextPrime += 2;
+  while (!isPrime(m_nextPrime))
+  {
+    m_nextPrime += 2;
+  }
+}
+\end{code}
+
+\subsubsection{Mandelbrot Image Task}\label{chapter:scalable:app-demo:task-mandelbrot}
+
+The \texttt{MandelImageTask} is the task that takes on the responsibility for generating a Mandelbrot image. As described earlier, this is done by creating a large number of sub-tasks (one for each line in the image) and waiting for them to complete before finishing. The essential parts of the declaration for the task is shown in \FigureCode \ref{chapter:scalable:app-demo:mandelimagetask}.
+
+\begin{code}[caption={\texttt{MandelImageTask} Declaration}, label=chapter:scalable:app-demo:mandelimagetask]
+class MandelImageTask : public Task
+{
+public:
+  MandelImageTask(
+    double startX, double endX, 
+    double startY, double endY, 
+    uint16_t maxIterations, 
+    uint16_t sizeX, uint16_t sizeY, 
+    uint8_t* pixels, uint16_t stride, 
+    std::function<void ()> onComplete);
+
+  virtual void execute();
+
+private:
+  std::atomic<uint16_t> m_partsFinished;
+  std::condition_variable m_imageFinished;
+  std::mutex m_mutexImageFinished;
+
+  std::unique_ptr<uint16_t[]> m_image;
+
+  void prepareColors();
+  void copyToPixels();
+  void completePart();
+};
+\end{code}
+
+The constructor receives the Mandelbrot viewing parameters, along with details regarding the physical location and layout of the memory for where to place the final image. Additionally, the constructor allocates private memory to place the reults of the image sub-tasks. The code for this allocation is shown in \FigureCode \ref{chapter:scalable:app-demo:mandelimagetask:constructor}. The reason for using \texttt{std::unique\_ptr} is because this pointer should only ever be held by the task itself. There is also another benefit to using \texttt{std::unique\_ptr} is that its deleter correctly deletes arrays, where \texttt{std::shared\_ptr} does not. The reason for using \texttt{new} to perform the allocation rather than \texttt{std::make\_unique} is because the C++11 committee made a mistake in not providing \texttt{std::make\_unique} for arrays (it is coming in C++14).
+
+\begin{code}[caption={\texttt{MandelImageTask} Constructor}, label=chapter:scalable:app-demo:mandelimagetask:constructor]
+m_image = std::unique_ptr<uint16_t[]>(new uint16_t[sizeX * sizeY]);
+\end{code}
+
+The heart of this task is contained in the \texttt{execute} method. The first part of the method creates the sub-tasks, the second part waits for the sub-tasks to complete, and the final part is a call to place the results into the viewing image memory. The part of the method that creates the sub-tasks is shown in \FigureCode \ref{chapter:scalable:app-demo:mandelimagetask:sub-tasks}. In short, each line of the image is created as a new task and placed on the thread pool queue.
+
+\begin{code}[caption={\texttt{MandelImageTask} Create Sub-Tasks}, label=chapter:scalable:app-demo:mandelimagetask:sub-tasks]
+for (auto row : IRange<decltype(m_sizeY)>(0, m_sizeY - 1))
+{
+  auto task = std::shared_ptr<MandelPartTask>(
+    new MandelPartTask(
+      m_image.get() + row * m_sizeX, 
+      m_sizeX, m_maxIterations,
+      m_startY + row * deltaY,
+      m_startX, m_endX,
+      std::bind(&MandelImageTask::completePart, this)));
+  ThreadPool::instance()->enqueueTask(task);
+}
+\end{code}
+
+The interesting part of the sub-tasks is that the \texttt{completePart} private method is passed in as the completion function to call. The code for this method is found in \FigureCode \ref{chapter:scalable:app-demo:mandelimagetask:completepart}. The \texttt{MandelImageTask} maintains an atomic private member \texttt{m\_partsFinished} that tracks how many of the sub-tasks have finished. As each sub-task finishes, this method is invoked, causing \texttt{m\_partsFinished} to increment. After incrementing, a check is made to see if all tasks have completed, if they have, then the condition variable \texttt{m\_imageFinished} is signaled, causing the \texttt{execute} method to stop waiting and continue executing.
+
+\begin{code}[caption={\texttt{MandelImageTask::completePart}}, label=chapter:scalable:app-demo:mandelimagetask:completepart]
+void MandelImageTask::completePart()
+{
+  m_partsFinished++;
+  if (m_partsFinished == m_sizeY)
+  {
+    m_imageFinished.notify_one();
+  }
+}
+\end{code}
+
+After creating the sub-tasks, the \texttt{execute} method goes into an efficient waiting state, waiting for all of the sub-tasks to complete. The code for this is shown in \FigureCode \ref{chapter:scalable:app-demo:mandelimagetask:wait}. This segment of code performs a wait on the \texttt{m\_imageFinished} condition variable. Because condition variables can wake without having been signaled, I have chosen to use the \texttt{wait} overload that accepts a test function. For the test function parameter, I have written a simple lambda that validates that all of the sub-image tasks have actually completed. If they haven't, the wait returns to an efficient state, if they have, the wait completes and execution continues.
+
+\begin{code}[caption={\texttt{MandelImageTask} Wait for Sub-Tasks}, label=chapter:scalable:app-demo:mandelimagetask:wait]
+std::unique_lock<std::mutex> lock(m_mutexImageFinished);
+m_imageFinished.wait(lock,
+  [this]()
+  {
+    return m_partsFinished == m_sizeY;
+  });
+\end{code}
+
+Once all of the sub-tasks have completed their work, a call to \texttt{copyToPixels} is made, the code for this method is shown in \FigureCode \ref{chapter:scalable:app-demo:mandelimagetask:copyToPixels}. The purpose of this method is to take the local task image results and copy them into the buffer being used to display the image. The \texttt{get} method of \texttt{std::unique\_ptr} is used to obtain the underlying raw memory pointer, this is desired for performance reasons. This code moves over the pixels in the image, copying from the newly computed image into the destination image pointer passed in through the constructor.
+
+\begin{code}[caption={\texttt{MandelImageTask::copyToPixels}}, label=chapter:scalable:app-demo:mandelimagetask:copyToPixels]
+void MandelImageTask::copyToPixels()
+{
+  uint16_t* source = m_image.get();
+  uint8_t* destination = m_pixels;
+  for (auto row : IRange<decltype(m_sizeY)>(0, m_sizeY - 1))
+  {
+    uint8_t* destination = m_pixels + row * m_stride;
+    for (auto column : IRange<decltype(m_sizeX)>(0, m_sizeX - 1))
+    {
+      uint16_t color = *(source++);
+      *(destination++) = m_colors[color].r;
+      *(destination++) = m_colors[color].g;
+      *(destination++) = m_colors[color].b;
+      *(destination++) = 0;
+    }
+  }
+}
+\end{code}
+
+An interesting note about this being done as part of the task itself, rather than returning a result back to the \texttt{ScalabilityApp} class and having it perform the action; similar to how this is done with the \texttt{NextPrimeTask}. As currently written, two threads are (potentially) accessing the display memory at the same time, the task thread writing a new result, and the main application thread reading it for display. For a demonstration application like this it is fine, the image rendering is hardly affected. However, for something other than a demonstration, a double buffering technique is clearly the approach that should be taken. It is possible to create a double buffered solution, but at the expense of additional code complexity that that takes away from the focus of this chapter, which is scalability through task decomposition.
+
+\subsubsection{Mandelbrot Image Section Task}\label{chapter:scalable:app-demo:task-subimage}
+
+The \texttt{MandelPartTask} class performs the heavy computational lifting for the Mandelbrot image. The \texttt{MandelImageTask} spawns a large number of these tasks, but it is the \texttt{MandelPartTask} that computes the actual image data. This task is quite similar to the \texttt{NextPrimeTask} class with respect to its simplicity. It takes a few parameters that tell it what part of the image to compute and where to place the results, and that is all. The declaration for the class is found in \FigureCode \ref{chapter:scalable:app-demo:mandelparttask}.
+
+\begin{code}[caption={\texttt{MandelPartTask} Declaration}, label=chapter:scalable:app-demo:mandelparttask]
+class MandelPartTask : public Task
+{
+public:
+  MandelPartTask(
+    uint16_t* imageRow, 
+    uint16_t resolution, uint16_t maxIterations, 
+    double y, double startX, double endX, 
+    std::function<void ()> onComplete);
+
+  virtual void execute();
+
+private:
+  uint16_t* m_imageRow;
+  uint16_t m_resolution;
+  uint16_t m_maxIterations;
+  double m_y;
+  double m_startX;
+  double m_endX;
+
+  uint16_t computePoint(double x0, double y0);
+};
+\end{code}
+
+The constructor receives a raw pointer that tells the task where to place its results. With C++11, I'd normally not make use of raw pointers, but there are always exceptions, this is one of those exceptions. The purpose of this task is to compute a row of pixels in a Mandelbrot image and place the results into a memory region owned by another part of the code. Because this task does not ever have ownership of the memory, there really isn't a reason to need any kind of shared pointer. The second reason is that of performance. Because the computation of the pixels is performance sensitive, where reasonable small performance opportunities should be taken. Finally, and maybe most importantly, when the parent task is creating these sub-tasks, shared pointers don't exist to each of the image rows, therefore, it would require creating shared pointers to even give to the \texttt{MandelPartTask} code.
+
+The \texttt{execute} method is shown in \FigureCode \ref{chapter:scalable:app-demo:mandelparttask:execute}. This method loops through each of the pixels in a row, computes the number of iterations, and then uses a smooth coloring algorithm to determine the pixel color. Because the task is writing pixel values directly into the parent task image result, there is nothing else to do after the computation is done, the results are already in place.
+
+\begin{code}[caption={\texttt{MandelPartTask::execute} Method}, label=chapter:scalable:app-demo:mandelparttask:execute]
+void MandelPartTask::execute()
+{
+  double deltaX = (m_endX - m_startX) / m_resolution;
+  for (auto x : IRange<decltype(m_resolution)>(0, m_resolution - 1))
+  {
+    auto iterations = computePoint(m_startX + x * deltaX, m_y);
+
+    double colorIndex = iterations - log2MaxIterations;
+    colorIndex = (colorIndex / m_maxIterations) * 768;
+    colorIndex = std::min(colorIndex, 767.0);
+    colorIndex = std::max(colorIndex, 0.0);
+
+    m_imageRow[x] = static_cast<uint16_t>(colorIndex);
+  }
+}
+\end{code}
+
+Additional details of the Mandelbrot comptuation, along with a discussion of the \texttt{computePoint} method are found in Appendix \ref{appendix:mandelbrot}.
+
+\section{Summary}\label{chapter:scalable:summary}
+
+This chapter introduced the concept of scalability through task-based computation. Only a few simple building blocks are necessary to achieve effective scalability. The first is the basic building block of a task. A task is a unit of computation, with the intention that many (or all) tasks can be computed in parallel. The second is an application wide available thread pool through which threads and tasks are matched and dispatched for computation. The final part is an application designed and constructed around these building blocks.
+
+The application presented in this chapter shows how each of the building blocks are relatively simple to build and utilize. It also shows how to take a computationally intensive task, the computation of a Mandelbrot set, break it down into sub-tasks that can be computed in parallel, results collected, and then presented to the user. Additionally, the application shows that different kinds of tasks can flow through the scalable framework, allowing any number of different kinds of computational activities to take place at the same time. Finally, the application demonstrates scalability through improved performance on systems with larger numbers of CPU cores.

@@ -1,0 +1,72 @@
+% Copyright © 2015 by James Dean Mathias
+% All Rights Reserved
+
+\chapter{Misc. Code}\label{appendix:misc-code}
+
+This appendix contains various snippets of code referred to, but not shown, in the main text of the book. Each code snippet is accompanied by a description of what it does and any interesting parts of the implementation.
+
+\section{IRange}
+
+One of the missing pieces from the updated standard libary is a way to define an integral range over which a range-based for loop can iterate. Part of what we are trying to do with C++11 is to get away from counted loops wherever possible. To overcome this limitation I have written an \texttt{IRange} template class that provides this capability, shown in \FigureCode \ref{appendix:misc-code:irange}. The class is templated on type \texttt{T}, allowing the developer to choose the integral type most appropriate for the context (e.g., signed or unsigned).
+
+\begin{code}[caption={\texttt{IRange} Class}, label=appendix:misc-code:irange]
+template <typename T>
+class IRange
+{
+public:
+    class iterator
+    {
+    public:
+        T operator *() const { return m_position; }
+        const iterator &operator ++()
+        {
+            m_position += m_increment;
+            return *this; 
+        }
+
+        bool operator ==(const iterator &rhs) const
+        { 
+            return m_position == rhs.m_position;
+        }
+        bool operator !=(const iterator &rhs) const
+        { 
+            return m_position < rhs.m_position;
+        }
+
+    private:
+        iterator(T start) : 
+            m_position(start),
+            m_increment(1)
+        { }
+
+        iterator(T start, T increment) : 
+            m_position(start),
+            m_increment(increment)
+        { }
+
+        T m_position;
+        T m_increment;
+
+        friend class IRange;
+	};
+
+    IRange(T begin, T end) : 
+        m_begin(begin), 
+        m_end(end + 1)
+    { }
+
+    IRange(T begin, T end, T increment) :
+        m_begin(begin, increment),
+        m_end(end + 1, increment)
+    { }
+
+    iterator begin() const { return m_begin; }
+    iterator end() const { return m_end; }
+
+private:
+    iterator m_begin;
+    iterator m_end;
+};
+\end{code}
+
+This class works by storing only the beginning and ending values of the range, and the current position of the iterator. Although this requires an object instance to be created at runtime, it is lightweight with respect to the time to construct and its memory footprint.

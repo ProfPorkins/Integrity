@@ -1,0 +1,14 @@
+#TeXlipse project settings
+#Sun Jun 23 08:40:04 MDT 2013
+markTmpDer=true
+builderNum=2
+outputDir=
+makeIndSty=
+bibrefDir=
+outputFormat=pdf
+tempDir=tmp
+mainTexFile=Dist-Systems.tex
+outputFile=Dist-Systems.pdf
+langSpell=en
+markDer=true
+srcDir=

@@ -1,0 +1,113 @@
+% Copyright © 2015 by James Dean Mathias
+% All Rights Reserved
+
+\chapter{Introduction}\label{chapter:overview}
+
+The purpose of this book is to act as a resource for those interested in building scalable, distributed, and fault-tolerant systems using C++11 and the Boost C++ libraries. Each of these topics is covered in detail, along with working code that can be used as the basis for developing or extending your applications. The combination of the C++11 language enhancements and standard library additions have made cross platform, distributed systems programming more accessible than ever before. This is a practical guide that shows how to develop these systems using C++11, with support from the Boost C++ libraries; this is a code heavy book.
+
+This book assumes a background in C++ programming, familarity with multi-threading, synchronization, and network programming concepts, but not necessarily mastery or other expertise with them. Exposure to the new features introduced with C++11 language and standard library is not assumed, therefore an introduction to relevant topics are covered in Chapter \ref{chapter:cpp11}. In particular, this includes lambda functions, along with the new threading and synchronization libraries. No background with Boost is assumed, an introduction to Boost and the relevant networking libraries is provided in Chapter \ref{chapter:networking}. Enough discussion is given and code provided to be reasonably accessible to a wide range of developers, from the relatively inexperienced all the way up to senior developers.
+
+The overarching approach presented in this book is that of task/data decomposition, presented in the context of scalability, distribution, and fault-tolerance. There are a number of tecchnical implementation details that are necessary which can work to obscure the general simplicity of the overall approach. It is important to maintain focus while working through these technical details that fundamentally, the building block is that of identifying and developing tasks that can be computed in parallel. This is true regardless if the application is intended to run on a single computer with any number of processors and CPU cores, or as a distributed application running across a wide range of heterogenous systems.
+
+This book takes something of a \textit{roll your own} approach to the construction of applications. It is recognized there are existing frameworks such as OpenMP\footnote{http://en.wikipedia.org/wiki/OpenMP}, MPI\footnote{http://en.wikipedia.org/wiki/Message\_Passing\_Interface}, and HTCondor\footnote{http://en.wikipedia.org/wiki/HTCondor} that can be used as building blocks to achieve similar results, however, those frameworks are not appropriate for all applications; this book does not present development approaches using such frameworks. There are any number of good reasons to choose those for an application, similarly there are any number of good reasons not to choose them. The techniques presented in this book may be considered at a lower level than those because much of the infrastructure is built from the ground up, but also simply a \textit{different} approach, with its own set of pros and cons, which are discussed throughout.
+
+Existing applications benefit greatly from the approach presented in this book. It is likely easier to modify an application to incorporate the computing framework presented in this book versus changing the computing model over to something like MPI. Furthermore, not all computing environments are as controlled, or dedicated, as required for something like MPI. Your application may need to be delivered to dozens or thousands of customers, only some of which have the systems expertise or environment necessary to setup an MPI framework. The techniques presented in this book require zero configuration for single systems and trival configuration (command line parameters) for distributed applications, making such applications much more reasonable to deploy and deliver to customers.
+
+\section{C++11 Features}
+
+C++11 introduced a host of new language and standard library features. While C++ is never going to be considered a syntactically \textit{simple} language, many of the new language features help to reduce some of the syntactic complexity. Additionally, the standard library has adopted a number of libraries from Boost which support the writing of cross-platform and multi-threaded applications. A full chapter is dedicated to introducing the new capabilities that are specifically relevant to the construction of scalable, distributed, and fault-tolerant systems as presented in this book.
+
+The following language and standard library features are discussed in Chapter \ref{chapter:cpp11}:
+
+\begin{itemize}
+	\item \texttt{auto} Keyword
+	\item \texttt{decltype} operator
+	\item \texttt{nullptr} Constant
+	\item Range-based for Loop
+	\item Smart Pointers
+	\item Lambdas
+	\item Threading \& Synchronization
+\end{itemize}
+
+Each of these topics is discussed in detail and presented with working code samples to demonstrate their use.
+
+\section{Boost C++ Libraries}
+
+Chapter \ref{chapter:networking} provides an introduction to the Boost C++ libraries, which provides the basis for the networking framework used by much of the code presented in this book. Boost.Asio is the primary library that is covered. It provides a high-level approach to interprocess communication (i.e., networking), along with some key capabilities in support of threading, thread pools, and synchronization with respect to interprocess communication.
+
+The following topics from the Boost.Asio library are covered in Chapter \ref{chapter:networking}:
+
+\begin{itemize}
+  \item Introduction to Boost.Asio
+  \item The \texttt{io\_service}
+  \item The \texttt{io\_service} Queue
+  \item Thread Pools on an \texttt{io\_service}
+  \item Strands
+  \item Buffers
+  \item Socket Connections
+  \item Socket Communication
+  \item Multi-threading \& Sockets
+\end{itemize}
+
+\section{Scalable Systems}
+
+In the context of this book a \textit{scalable} system is used to describe an application that scales to fully utilize the capabilities of a single computer or device. Generally speaking \textit{scalable} applies to all kinds of applications, whether they run on a single computer or on a large distributed computing environment. Because this book builds towards full distributed and fault-tolerant systems, it is necessary to reduce the scope of the term to mean only a single computing device.
+
+Three chapters are devoted to the topic of scalable systems, two for distributed systems, and only a single for fault-tolerance, with one more chapter extending the fault-tolerance framework capabilities. The reason for this is that scalability is the building block upon which the other systems are built. The next major building block is the distribured framework. Once the scalable and distributed infrastructure is in place, the most complex parts of the system are complete, allowing the fault-tolerant component to come along as a modest update.
+
+Scalable systems begin with identifying computing tasks that can be computed in parallel. Chapter \ref{chapter:scalable-task-based} starts the discussion by showing how to create an application that can take small computing tasks and spread them over any number of available CPU cores on a system. Often times applications have need for associating priority with tasks, some need to be done as soon as possible, others can tolerate being delayed. Chapter \ref{chapter:scalable-priority} takes on the challenge of creating a system that provides for application level control of task priority. Finally, it is often the case that some tasks must wait for others to complete before they can be computed, causing even more complexity in the underlying task distribution logic. Chapter \ref{chapter:scalable-dag} tackles the complex subject of providing for dependencies among computing tasks.
+
+The work done in the initial chapter on scalable computing, Chapter \ref{chapter:scalable-task-based}, in building a framework that performs computations through a task-based approach is the most important. Everything else is just different ways of managing the order, distribution, and collection of the results from the tasks. Priority and dependencies affect the ordering of when and how the tasks are computed, whereas distribution changes the physical device to which computing resource a task is directed, and fault-tolerance decides how to handle tasks that are in process when their computing resource fails. Everything revolves around having a task-based computing framework, with that in place, the other capabilities become quite reasonable to provide.
+
+\section{Distributed Systems}
+
+This book uses the term \textit{distributed system} to mean any two or more connected computing devices, which may be homogenous (same capabilities) or heterogeneous (different capabilities). When used in combination with \textit{scalable} to describe an application, it means an application that scales to fully utilize the capabilities of all the connected systems. Furthermore, the intention is that the application scales across the distributed environment without requiring it to be rebuilt, it dynamically adapts to fully utilize the system's resources.
+
+\section{Fault-Tolerant Systems}
+
+An easily overlooked component of distributed systems is \textit{fault-tolerance}. Fault-tolerance indicates an ability for an application to recover gracefully from a failure or error condition. The kind of fault-tolerance presented in this book is with respect to network and computing device failures. The goal is to build a system that continues correct operation in the face of an unreliable network or computing environment. Solving for one of these errors, solves both problems. As far as an application is concerned, the failure of either a network connection to a computing device, or the failure of the computing device itself looks the same and has the same result, the computing resource is no longer available. Therefore, a solution to one, is a solution to both.
+
+Fault-tolerance only means \textit{tolerant}, not \textit{immune}, to failures. There are any number of different failure scenarios an application may face, both internal and external. The degree to which fault-tolerance is supported depends upon the application need, the complexity of providing that support, and ultimately the cost. A speadsheet has different fault-tolerant requirements versus a multi-player game versus the software running an inter-planetary probe, with each having different risks and costs.
+
+A further benefit of building this kind of fault-tolerance is the ability for the application to dynamically scale, up or down, as computing resources come and go. Perhaps your application utilizes unused computing resources when employees leave for the day. By allowing for fault-tolerance an application can dynamically increase resource utilization when a computing resource becomes available, and similarly dynamically decrease resource utilization as appropriate, all while still providing correct operation.
+
+One goal for this book is to show that it is relatively straightforward to add a fairly robust fault-tolerant capability to an application, when the proper underlying framework is provided. By building upon the task-based framework developed in the scalable and distributed chapters of the book, fault-tolerance readily fits into the model and is implemented with only modest code changes.
+
+\section{Performance}
+
+The framework algorithms in the code presented throughout the book are written to be approachable and generalized, with performance a secondary consideration. With respect to performance, they must be evaluated in the context of overall system performance. When the applications presented in this book are profiled, over 97\% of the time is spent doing computational tasks, rather than framework or synchronization. While more performance improvements may be made, they provide no meaningful impact with respect to overall system performance.
+
+\section{Source Code}
+
+A large number of working demonstration programs are provided as part of this book. To a great extent, the chapter discussions are oriented around explaining sections of code from these demonstration programs. In particular, the core chapters on scalability, distributed systems, and fault-tolerant systems, are based around different implementations of an interactive Mandelbrot visualization application. The full source code for each revision is provided as part of this book, which includes each different building block framework. The frameworks from these programs can be used as the basis for developing a new application of your own, or for integration into an existing system.
+
+The code presented within the pages of the book sometimes differs from that found in the downloaded source code. In order to fit code within the pages of the book, the formatting is often changed from what I do in a code editor; it is not how I prefer to format the code, but it is the limitation of the book format. Sometimes the code snippits are changed slightly to eliminate statements that create unnecessary noise as part of the discussion. Almost all comments are removed from the source listings, while the downloaded code is filled with comments. Finally, I expect to continue to make small improvements to the code after publication of the book.
+
+\section{Looking Forward}
+
+This book is only the first step in the evolution of an even more sophisticated system I am working towards. The following are topics that I intend to tackle in revisions to this book and another book that follows on from this one:
+
+\begin{itemize}
+  	\item Finish separation of framework from application code
+	\item Google Protocol Buffers
+	\item Authentication and encryption
+	\item Reporting of task status for better fault detection
+	\item Task cancellation
+	\item Overcome single point of failure
+\end{itemize}
+
+The first change I'd like to make is to fully separate underlying framework from the application code. Currently there are bits of the framework in the application code, such as the setup of the networking and handling of the result messages. This needs to get cleaned up and fully separated from the application code.
+
+The next change is to move away from the custom, ad-hoc, message encoding scheme and replace it with Google Protocol Buffers\footnote{https://github.com/google/protobuf}. The technique presented in this revision of the book is well and good, but has some compromises. Part of the purpose in replacing it is that it will force me to create a better separation between task and messaging code. It also provides the benefit of a significantly more robust message definition scheme, one that can stand the test of time as an application grows. 
+
+An enhancement that goes along with replacing the messaging scheme is to introduce authentication and encryption. I have a long term eye towards the ability for this framework to be utilized over the Internet. Because of this, it makes sense to authenticate and encrypt all networking traffic to help prevent hacking.
+
+Another area that needs to be addressed is a robust way to handle knowing when a server has failed and a task (or tasks) should be distributed elsewhere. The current mechanism is to define a timeout, which is difficult to do at coding time, given that different computers will execute the task at different rates. Therefore a new task computation status reporting scheme is required, one that has compute servers report at expected intervals the status of a task execution. This can then form the basis for better fault detection and recovery.
+
+Related to task status and fault detection is the ability to cancel a task, or group of tasks, after having been sent for computation. There are several reasons for doing this. The first is that the operator of an application may decide some long-running task (or tasks) are no longer needed, and they should be immediately cancelled, making the resources they are currently consuming available for other tasks. Another reason is to allow for a more rapid shutdown. The current system requires that any tasks currently running at a compute server must complete before it will finish responding to a termination signal.
+
+One of the biggest issues to overcome is the single point of failure that exists with having only one client. In the design presented throughout this book, if the client fails, the entire system goes down. My eventual design removes the problem of having a single client, allowing for any number of clients, and allowing for any (or all) of them to fail, but leaving the server framework intact and available as new clients connect.
+
+\section{Acknowledgements}
+
+I'd like to thank the following for helping with comments that have aided in improving the text: Chad Knight, Seth Humphries, Matt Burnham, Chris Heaps, and Scott Cannon.

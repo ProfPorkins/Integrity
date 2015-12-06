@@ -1,0 +1,871 @@
+% Copyright © 2015 by James Dean Mathias
+% All Rights Reserved
+
+\chapter{Relevant C++11 Features}\label{chapter:cpp11}
+
+C++11 was adopted in August of 2011 and introduces a host of new language and standard library features. The language was enhanced with several features that simpify the way code is written, making it possible to write more concise code, at the same time, making it more understandable. With respect to new language features, of particular note are the \textit{auto} keyword, the range-based for loop, and lambdas. The standard library was significantly enhanced by adopting a number of libraries from Boost (\href{http://www.boost.org}{http://www.boost.org}), along with adding a few new pieces. Specifically the threading and synchronization libraries enable a single C++ code-base that compiles and executes on a wide number of platforms. This chapter discusses the C++ features introduced with C++11 that are used throughout this book; it is not an exhaustive review of all new C++11 language and standard library features.
+
+\section{\texttt{auto} Keyword}\label{chapter:cpp11:auto}
+
+The \texttt{auto} keyword is used to instruct the compiler to infer the type for a variable (or constant if you like). Even though the developer does not declare the type, the type is still known, by inference, to the compiler and while the program is compiled; it is not a dynamic or variant type.
+
+A trivial usage of \texttt{auto} is for primitive types, such as \texttt{int}s and \texttt{float}s. Examples of these are shown in \FigureCode \ref{chapter:cpp11:auto:trivial}.
+
+\begin{code}[caption={Trivial \texttt{auto}}, label=chapter:cpp11:auto:trivial]
+auto intValue = 10;
+auto floatValue = 3.14f;
+\end{code}
+
+Another case for using the \texttt{auto} keyword is when using iterators. It is generally cumbersome and mistake-prone to write out the full type for an iterator, the \texttt{auto} keyword eases this burden. Inferring the type of an iterator is shown in \FigureCode \ref{chapter:cpp11:auto:iterator}.
+
+\begin{code}[caption={Inferred Iterator}, label=chapter:cpp11:auto:iterator]
+std::unordered_map<std::string, std::uint_32> cityPopulation;
+... // cityPopulation is initialized here
+
+auto myHome = cityPopulation.find("My Home");
+\end{code}
+
+Without the \texttt{auto} keyword, the \texttt{.find} statment would have to look like \FigureCode \ref{chapter:cpp11:auto:typed-iterator}.
+
+\begin{code}[caption={Iterator Type}, label=chapter:cpp11:auto:typed-iterator]
+std::unordered_map<std::string, std::uint32_t>::iterator 
+  myHome = cityPopulation.find("My Home");
+\end{code}
+
+There is no universal guiding principle for when to use \texttt{auto} versus writing the type (e.g., \texttt{uint16\_t}); although Scott Meyers might disagree. You'll have to develop your own preference for the most appropriate usage; the code presented in the book demonstrates my preference at the time of writing.
+
+\section{\texttt{decltype} Operator}\label{chapter:cpp11::decltype}
+
+The \texttt{decltype} keyword is an operator that extracts the type of a variable or expression. This operator instructs the  compiler to take the type of the variable or expression and use it as the type for the specified identifier. \FigureCode \ref{chapter:cpp11:decltype:trivial} shows an example of a trival usage of \texttt{decltype}.
+
+\begin{code}[caption={Trivial \texttt{decltype}}, label=chapter:cpp11:decltype:trivial]
+int source = 10;
+decltype(source) scaled = source * 4;
+\end{code}
+
+The sample code provided in \FigureCode \ref{chapter:cpp11:decltype:template} shows its utility with template types. The class \texttt{EightBitArray} is templated on the data type of an array that has a fixed size off 256 entries (8 bits). The variable \texttt{source} requires a type declaration, whereas \texttt{destination}'s type is based upon the type of the variable \texttt{source}.
+
+\begin{code}[caption={Templates \& \texttt{decltype}}, label=chapter:cpp11:decltype:template]
+template <typename T>
+class EightBitArray
+{
+public:
+  T& operator[](uint8_t index) { return m_array[index]; }
+
+private:
+  std::array<T, 256> m_array;
+};
+
+int main()
+{
+  EightBitArray<double> source;
+  decltype(source) destination;
+
+  ... Do something interesting with the arrays ...
+
+  return 0;
+}
+\end{code}
+
+Without the context of a larger application it is difficult to demonstrate \texttt{decltype}'s effective use, but there are good uses that help clean up some otherwise clumsy syntax. The way that I've found to use \texttt{decltype} is to ensure a set of related types are all the same. The initial type is specified, then all other variables, class members, or parameters are defined using \texttt{decltype}. In this way, when the original type is changed, all the other types are guaranteed to change at the same time, without having to go through all the code, potentially making a mistake.
+
+\section{\texttt{nullptr} Constant}\label{chapter:cpp11:nullptr}
+
+C++11 introduces a \texttt{nullptr} constant that is intended for use with pointer types, versus the old C and C++ techniques of \texttt{NULL} and \texttt{0}. Having the \texttt{nullptr} constant prevents ambiguity with the integral values of \texttt{NULL} and \texttt{0}. Its use is quite simple, as demonstrated in \FigureCode \ref{chapter:cpp11:nullptr:example}.
+
+\begin{code}[caption={nullptr Example}, label=chapter:cpp11:nullptr:example]
+uint8_t* myValue = nullptr;
+
+if (myValue == nullptr)
+{
+  myValue = new uint8_t(6);
+}
+
+delete myValue;
+\end{code}
+
+It is important to note that I \textbf{do not} recommend allocation of raw pointers, apart from a few exceptional cases. Section \ref{chapter:cpp11:smart-pointers} discusses the use of smart pointers, the preferred approach to C++ memory management. All of the code examples in this book make use of smart pointers.
+
+\section{Range-based for Loop}\label{chapter:cpp11:ranged-for}
+
+The range-based for loop simplifies the syntax in expressing a for loop, in addition to preventing issues such as \textit{off by one} errors in counted loops. The concise syntax improves readability without imposing any penalties. The new \texttt{for} loop can be used with C/C++ style arrays, and any type that has iterators accessed through \texttt{.begin()} and \texttt{.end()} methods; the standard library containers all work with this form of the \texttt{for} loop.
+
+The general form of the range-based for loop is shown in \FigureCode \ref{chapter:cpp11:ranged-for:form}.
+
+\begin{code}[caption={Ranged For Loop Expression}, label=chapter:cpp11:ranged-for:form]
+for (type name : expression)
+  statement;
+\end{code}
+
+The \texttt{type} is the type of the element returned by the expression, which can be inferred through the use of the \texttt{auto} keyword. The \texttt{name} is the identifier by which the value is called and used within the loop. The \texttt{expression} is any valid sequence, most commonly C/C++ arrays and standard library containers. 
+
+Consider the pre-C++11 code shown in \FigureCode \ref{chapter:cpp11:ranged-for:iterated} that uses the standard library and iterators.
+
+\begin{code}[caption={Iterated For Loop}, label=chapter:cpp11:ranged-for:iterated]
+uint32_t myAccumulate(const std::vector<uint8_t>& source)
+{
+  uint32_t total = 0;
+  for (std::vector<uint8_t>::const_iterator itr = 
+     source.begin(); 
+     itr != source.end(); 
+     ++itr)
+  {
+    total += *itr;
+  }
+  return total;
+}
+\end{code}
+
+In this code the iterator must be fully specified, end of sequence test written, manually update the iterator, and finally, dereference the iterator to get at the value.
+
+The code in \FigureCode \ref{chapter:cpp11:ranged-for:inferred} shows the same function, but this time using the \texttt{auto} keyword to infer the type of the iterator.
+
+\begin{code}[caption={Iterated For Loop With Inferred Iterator}, label=chapter:cpp11:ranged-for:inferred]
+uint32_t myAccumulate(const std::vector<uint8_t>& source)
+{
+  uint32_t total = 0;
+  for (auto itr = source.begin(); itr != source.end(); ++itr)
+  {
+    total += *itr;
+  }
+  return total;
+}
+\end{code}
+
+This code is reasonably simplified only by using the \texttt{auto} keyword to infer the type. However, the end of sequence test, manual update of the iterator, and dereferencing of the iterator are all still necessary; leaving room to accidentally make a mistake, in addition to the visual complexity overhead.
+
+The code in \FigureCode \ref{chapter:cpp11:ranged-for:accumulate} demonstrates the use of the ranged-based for loop in combination with the \texttt{auto} keyword.
+
+\begin{code}[caption={Ranged For Loop}, label=chapter:cpp11:ranged-for:accumulate]
+uint32_t myAccumulate(const std::vector<uint8_t>& source)
+{
+  uint32_t total = 0;
+  for (auto value : source)
+  {
+    total += value;
+  }
+  return total;
+}
+\end{code}
+
+The first thing to notice is how concise the code is and syntactically simplified from the first example. The next thing to notice is that instead of working with an iterator, \texttt{value} is the value! Our mind is not cluttered with thinking about iterators, instead we are now more focused on solving the problem, summing integers from a vector.
+
+The \texttt{auto} keyword can be decorated with a reference, among others (e.g., \texttt{const}), which allows the value to be modified. This is demonstrated in \FigureCode \ref{chapter:cpp11:ranged-for:reference}.
+
+\begin{code}[caption={Ranged For With Reference Type}, label=chapter:cpp11:ranged-for:reference]
+void myScale(std::vector<uint8_t>& source, uint32_t scalar)
+{
+  for (auto& value : source)
+  {
+      value *= scalar;
+  }
+}
+\end{code}
+
+This code tells the compiler to infer the type, but also to make sure the inferred type is a reference. By doing this, the \texttt{value} is allowed to be modified, which obviates the need to create a counted for loop to index the vector and update the value in the old way.
+
+\section{Smart Pointers}\label{chapter:cpp11:smart-pointers}
+
+Smart pointers are not a new C++11 standard library feature, but are unfamiliar to a large enough audience that it is important to review as part of this chapter. While they are not new, there is one new addition to the family, \texttt{std::unique\_ptr}, improvements to both \texttt{std::shared\_ptr} and \texttt{std::weak\_ptr}, with \texttt{std::auto\_ptr} now deprecated. This section discusses the concept of smart pointers and provides specific discussion of the \texttt{std::shared\_ptr}. The other smart pointers types are useful, but are not essential to the core content of this book.
+
+\subsection{Automatic Resource Management}\label{chapter:cpp11:smart-pointers:resource-management}
+
+In simple terms, a smart pointer is a class that provides a wrapper around a raw pointer. The class provides automatic memory management of the underlying raw pointer, while also providing a natural C++ syntactical interface for working with the pointer. Interestingly, smart pointers can be used to manage other kinds of resources, such as file handles, database connections, or network connections; these are not covered or demonstrated in this book.
+
+The foremost problem solved by shared pointers is to prevent most situations of \textit{memory leaks}. This is possible through the use of the concept of \textit{reference counting} combined with the shared pointer being a class and having a constructor and destructor. A shared pointer contains a reference count that indicates how many other shared pointers refer to the same raw pointer. In the constructor the reference count is incremented and in the destructor it is decremented. During the destructor, if the reference count goes to 0, the raw pointer is deleted by the shared pointer, thereby automatically freeing the memory.
+
+C++ smart pointers are implemented through the use of templates, allowing any type to be contained. Consider the code in \FigureCode \ref{chapter:cpp11:smart-pointers:intro} that demonstrates a couple uses of a \texttt{std::shared\_ptr}.
+
+\begin{code}[caption={Smart Pointer Introduction}, label=chapter:cpp11:smart-pointers:intro]
+{
+  std::shared_ptr<uint32_t> myValue(new uint32_t(6));
+  std::cout << *myValue << std::endl;
+}
+...
+{
+  auto myValue = std::make_shared<uint32_t>(6);
+  std::cout << *myValue << std::endl;
+}
+\end{code}
+
+There are several things of note in \FigureCode \ref{chapter:cpp11:smart-pointers:intro}. The first is because the shared pointer is a template, the type must be supplied; in this example an \texttt{uint32\_t}. The second is the two different ways the \texttt{std::shared\_ptr} is allocated. The first code segment uses the \texttt{new} keyword to allocate the memory, whereas the second uses \texttt{std::make\_shared}. Both compile and execute correctly, why the difference and does it make any difference? The difference is in memory allocation efficiency. In the first example, a memory allocation is made for the value, and another is made for the underlying reference count memory; two different memory allocations. In the second example a single allocation is used to allocate memory for the value and the underlying reference count memory. The second example makes use of the \texttt{auto} keyword to deduce the shared pointer type, which is not possible with the first example. The final item of note in this code is the lack of any code that deallocates the memory. Instead of having to write the code that does this, it happens automatically when \texttt{myValue} goes out of scope. As it goes out of scope the reference count is decremented to 0 in the destructor and because it is 0, the raw pointer is deallocated; automatic memory management.
+
+\subsection{Copying Shared Pointers}\label{chapter:cpp11:smart-pointers:copying}
+
+Shared pointers can be copied, as they are copied, the reference count is incremented, allowing multiple shared pointers to refer to the same raw pointer, and when the last one goes out of scope the raw pointer is deleted. Consider the code in \FigureCode \ref{chapter:cpp11:smart-pointers:copy}.
+
+\begin{code}[caption={Shared Pointer Copy}, label=chapter:cpp11:smart-pointers:copy]
+{
+  std::shared_ptr<uint32_t> outer = nullptr;
+  {
+    std::shared_ptr<uint32_t> inner = std::make_shared<uint32_t>(6);
+    std::cout << *inner << std::endl;
+    outer = inner;
+  }
+  std::cout << *outer << std::endl;
+}
+\end{code}
+
+The first shared pointer, \texttt{outer} is not initialized, it is a valid \texttt{std::shared\_ptr} that doesn't point to anything. Below its declaration is a small scoped section of code where \texttt{inner} is initialized to refer to a value. The value is sent to \texttt{std::out}, and then \texttt{inner} is copied to \texttt{outer}; at this moment, the reference count to the raw pointer is incremented to 2, because two different \texttt{std::shared\_ptr}s refer to it. As \texttt{inner} goes out of scope, the reference count to the raw pointer is decremented from 2 to 1, the raw pointer is not deallocated. When \texttt{outer} goes out of scope, the reference count is decremented to 0 and the raw pointer is then deallocated.
+
+\subsection{Preventing The Copy Penalty}\label{chapter:cpp11:smart-pointers:copying-cost}
+
+There is a small performance penalty every time a \texttt{shared\_ptr} is copied. One of the most common times this occurs is when one is passed as a parameter to a function. Unless otherwise specified, C++ makes copies of function parameters (pass by value), \texttt{shared\_ptr}s are no different. To avoid the cost associated with making a copy of a parameter, it can be marked as a reference type. Additionally, if the value of the parameter (the \texttt{std::shared\_ptr}) does not need to change, it is read only, it can be marked as \texttt{const}. The function in \FigureCode \ref{chapter:cpp11:smart-pointers:const-reference} illustrates passing a \texttt{shared\_ptr} by const reference.
+
+\begin{code}[caption={Const Shared Pointer Reference}, label=chapter:cpp11:smart-pointers:const-reference]
+void reportValue(const std::shared_ptr<uint32_t>& value)
+{
+  std::cout << "The value is: " << *value << std::endl;
+}
+\end{code}
+
+This approach avoids the cost of making a copy of the \texttt{shared\_ptr}, prevents an accidental coding error that might change the value of the pointer, while still providing the benefit of having a \texttt{smart\_ptr}.
+
+While the previous use of \texttt{const} combined with making the parameter a reference type avoids the cost of copying the \texttt{shared\_ptr} along with preventing the pointer from being changed, it does not prevent the value being pointed to from being changed; which might be desired in many cases. In order to prevent the value that is being pointed to from being changed, the type being pointed to needs to be identified as constant. The code segment in \FigureCode \ref{chapter:cpp11:smart-pointers:fully-const} demonstrates how to do this.
+
+\begin{code}[caption={Fully Const Shared Pointer}, label=chapter:cpp11:smart-pointers:fully-const]
+void reportValue(const std::shared_ptr<uint32_t const>& value)
+{
+  std::cout << "The value is: " << value << std::endl;
+}
+\end{code}
+
+This code adds a \texttt{const} decorator to the \texttt{uint32\_t}, which now tells the compiler to not allow any code that attempts to change the value.
+
+\section{Function Polymorphism}\label{chapter:cpp11:function-pointers}
+
+The ability to create and manage pointers to functions has been a part of C++ since before C++, it was possible back in the original C language. However, the syntax to use them is difficult to read, and the ability to create and effectively use pointers to class members is even more difficult. In part, to overcome this burdensome syntax, C++11 has adopted the Boost \texttt{function} and \texttt{bind} libraries, making them a native part of the language. Additionally, as you'll see in Section \ref{chapter:cpp11:lambdas}, there are other compelling reasons for adopting those libraries. In this section of the chapter the use of \texttt{std::function} is reviewed.
+
+Consider the polymorphic code in \FigureCode \ref{chapter:cpp11:function-pointers:function}. What makes the code polymorphic is that it takes as its first parameter a \texttt{std::function}. A \texttt{std::function} is simply a function wrapper, a wrapper that can refer (or point) to any so-called \textit{callable} expression, a regular C++ function is \textit{callable}.
+
+\begin{code}[caption={Polymorphic Function}, label=chapter:cpp11:function-pointers:function]
+void report(
+    std::function<std::string(std::string)> update, 
+    std::string message)
+{
+    std::cout << "Your message: " << update(message) << std::endl;
+}
+\end{code}
+
+The expected signature of the function parameter in \FigureCode \ref{chapter:cpp11:function-pointers:function} is one that returns a \texttt{std::string} and accepts a \texttt{std::string} parameter. The type that follows the \texttt{std::function<} is the return type, and the type inside the parenthesis is the type of the parameter the function accepts. As usual, the name of the function, \texttt{update}, follows the \texttt{std::function} type itself. In the case of this code, the \texttt{std::function} accepts only a single parameter, but it could be any number of parameters.
+
+In order to demonstrate function level polymorphism, we'll use the two functions in \FigureCode \ref{chapter:cpp11:function-pointers:leetE} and \ref{chapter:cpp11:function-pointers:leetT}, along with the method in \FigureCode \ref{chapter:cpp11:function-pointers:leetL}. The two functions and the method will be passed as parameters into the \texttt{report} function from \FigureCode \ref{chapter:cpp11:function-pointers:function}.
+
+\begin{code}[caption={Polymorphic Function}, label=chapter:cpp11:function-pointers:leetE]
+std::string leetE(std::string message)
+{
+  std::replace(message.begin(), message.end(), 'e', '3');
+  std::replace(message.begin(), message.end(), 'E', '3');
+  return message;
+}
+\end{code}
+
+\begin{code}[caption={Polymorphic Function}, label=chapter:cpp11:function-pointers:leetT]
+std::string leetT(std::string message)
+{
+  std::replace(message.begin(), message.end(), 't', '7');
+  std::replace(message.begin(), message.end(), 'T', '7');
+  return message;
+}
+\end{code}
+
+\begin{code}[caption={Polymorphic Function}, label=chapter:cpp11:function-pointers:leetL]
+class Replace
+{
+public:
+  std::string leetL(std::string message)
+  {
+    std::replace(message.begin(), message.end(), 'l', '1');
+    std::replace(message.begin(), message.end(), 'L', '1');
+    return message;
+  }
+};
+\end{code}
+
+In C++, the name of a function is also a pointer to that function. Therefore, for the first two functions, it is as simple as using the function name as the first parameter to the \texttt{report} function. The code shown in \FigureCode \ref{chapter:cpp11:function-pointers:use-leetET} demonstrates doing this.
+
+\begin{code}[caption={Polymorphic Function}, label=chapter:cpp11:function-pointers:use-leetET]
+std::string myMessage = "This is a leet test";
+report(leetE, myMessage);
+report(leetT, myMessage);
+\end{code}
+
+\section{Lambdas}\label{chapter:cpp11:lambdas}
+
+Lambda functions or expressions are one of the most interesting, and welcome, additions to the C++ language. The terms \textit{lambda function} and \textit{lambda expression} are considered interchangable; this book uses the term \textit{lambda function} or simply \textit{lambda}. A lambda function is the ability to define a function object that has no name, a so-called anonymous function object. This section introduces lambdas to a level that will make reading the code samples provided with this book comfortable to understand. This section provides a solid foundation from which to build a more sophisticated understanding; a comprehensive discussion of lambdas and their full exploitation is beyond the scope of this book.
+
+The best place to start is with a simple lambda function, as shown in \FigureCode \ref{chapter:cpp11:lambdas:simple}.
+
+\begin{code}[caption={Simple Lambda}, label=chapter:cpp11:lambdas:simple]
+void simpleLambda()
+{
+  auto myLambda = 
+    [] () 
+    {
+      std::cout << "My first lambda!" << std::endl; 
+    };
+  myLambda();
+}
+\end{code}
+
+The first thing you'll likely notice in \FigureCode \ref{chapter:cpp11:lambdas:simple} is the unusual syntax\footnote{The formatting of this lambda is to make it fit nicely within the page margin. Often a simple lambda like this will be placed on a single line.}, which is detailed in Section \ref{chapter:cpp11:lambdas:syntax}. Also notice the use of the \texttt{auto} keyword to have the compiler infer the type. The signature is known, but the type is a little more subtle and difficult to express, therefore the \texttt{auto} essentially becomes a necessity, not only a convenience. For now, it is enough to know that the variable \texttt{myLambda} is now a function object that can be invoked using the normal function syntax. When executed, the code in this example will output '\texttt{My first lambda!}' to the console. Clearly this example does not illustrate the benefits of lambdas, that is developed through the remainder of this section and chapter.
+
+\subsection{Functor Review}\label{chapter:cpp11:lambdas:functors}
+
+Before diving into the syntax and use of lambdas, it is worthwhile to review \textit{functors}, also known as function objects. Functors were possible well before C++11, making functors a good place to start.
+
+Functors make use of the ability to overload the \texttt{()} operator, which provides another convenient method for dynamic, or run-time, binding of code. A common use of functors is in combination with standard library containers. The \texttt{std::transform} algorithm takes a source iterator range, a destination start iterator, and \textit{transforms} the objects in that range by the function it is given. The code in \FigureCode \ref{chapter:cpp11:lambdas:functors:example} demonstrates its use.
+
+\begin{code}[caption={Functor Example}, label=chapter:cpp11:lambdas:functors:example]
+uint32_t initialize(uint32_t value)
+{ 
+  static uint32_t nextValue = 1;
+  return nextValue++;
+}
+
+class Scale
+{
+public:
+  Scale(uint8_t factor) : m_factor(factor) {}
+
+  uint32_t operator()(uint32_t& value) const
+  {
+    return value * m_factor;
+  }
+
+private:
+  uint8_t m_factor;
+};
+
+void functorExample()
+{
+  std::vector<uint32_t> myVector(10);
+
+  std::transform(
+    myVector.begin(), myVector.end(), myVector.begin(), initialize);
+  std::transform(
+    myVector.begin(), myVector.end(), myVector.begin(), Scale(4));
+}
+\end{code}
+
+The first \texttt{std::transform} in the \texttt{functorExample} function utilizes the \texttt{initialize} function to assign a set of increasing values to the vector. In this case, the clear use of a function is being utilized.
+
+The second \texttt{std::transform} creates an instance of the \texttt{Scale} class as the last parameter, passing a \texttt{4} as the constructor value, which becomes the scaling factor for the \texttt{Scale} instance. During the execution of the \texttt{std::transform} algorithm, it calls the \texttt{()} operator on the \texttt{Scale} instance, which accepts the original value from the vector, scales it by \texttt{m\_factor} and returns the result, with the result being stored back into the vector. The \texttt{Scale} class in this example is a \textit{functor}.
+
+With the advent of lambdas in C++11, they can be used in place of a functor, while providing some additional capabilities not easily handled by functors.
+
+\subsection{Lambda Syntax}\label{chapter:cpp11:lambdas:syntax}
+
+The basic lambda syntax is shown in \FigureCode \ref{chapter:cpp11:lambdas:syntax-sample}.
+
+\begin{code}[caption={Lambda Syntax}, label=chapter:cpp11:lambdas:syntax-sample]
+[ capture ] ( parameters ) mutable-specification exception-specification 
+  -><return-type> 
+  { body }
+\end{code}
+
+There are six sections that compose a lambda function: capture, parameters, mutable specification, exception specification, return type, and the body. Of these, only the \textit{capture} and the \textit{body} are required, the others are optional. Each of these is briefly described below.
+
+\begin{description}
+	\item[capture] Used to indicate which variables declared outside the scope of the lambda are accessible within the lambda. Because this is a lengthy topic, it is more fully explored in Section \ref{chapter:cpp11:lambdas:capture}.
+	\item[parameters] Lambdas are used in the context of some code calling into them, passing parameters into the lambda, just like passing parameters into a function. This section identifies the parameter types and names.
+	\item[mutable-specification] The \texttt{mutable} keyword can be used here to inform the lambda to call non-const member functions of captured (by copy) parameters.
+	\item[exception-specification] A \texttt{throw()} keyword can be used here to indicate the lambda does not throw an exception. If this specification is used and the code within the lambda has code that generates an exception, a compiler warning results.
+	\item[return-type] The return type for the lambda, in the same sense that a function returns a type. Generally this is not necessary as the compiler is able to infer the return type. If there is more than one return statement within the lambda, the return type becomes necessary \footnote{I recommend following the concept of having a single point of return for all code where reasonable.}.
+	\item[body] This is where the statements that perform the desired function are placed.
+\end{description}
+
+With knowledge of the full lambda syntax, the previous functor example can be re-written using Lambdas. This is demonstrated in \FigureCode \ref{chapter:cpp11:lambdas:example}.
+
+\begin{code}[caption={Lambda Example}, label=chapter:cpp11:lambdas:example]
+void lambdaExample()
+{
+  std::vector<uint32_t> myVector(10);
+
+  std::transform(myVector.begin(), myVector.end(), myVector.begin(),
+    [](uint32_t value)
+    {
+      static uint32_t nextValue = 1;
+      return nextValue++;
+    });
+
+  std::transform(myVector.begin(), myVector.end(), myVector.begin(),
+    [](uint32_t value)
+    {
+      return value * 4; 
+    });
+}
+\end{code}
+
+Through the use of lambdas we are able to create the same functionality with a much more concise piece of code. The development effort is reduced by not having to write free functions or functor classes that provide the needed functionality, instead, two short lambda functions are coded in-place.
+
+\subsection{Lambda Capture}\label{chapter:cpp11:lambdas:capture}
+
+A lambda is an object that captures external state at the time it is instantiated. Looking back at the function example in Section \ref{chapter:cpp11:lambdas:functors} we see the functor accepted a \texttt{scale} parameter as part of its constructor. The capture clause of a lambda is very much like the constructor parameters of a functor, the difference being a much simpler syntax. Consider each of the following capture examples:
+
+\begin{description}
+  \item[\texttt{[]}] Nothing is captured.
+  \item[\texttt{[=]}] Capture all used variables by value (copy).
+  \item[\texttt{[\&]}] Capture all used variables by reference.
+  \item[\texttt{[data]}] Capture the variable \texttt{data} by value.
+  \item[\texttt{[\&data]}] Capture the variable \texttt{data} by reference.
+  \item[\texttt{[=, \&data]}] Capture all used variables by value, except for \texttt{data} which is captured by reference.
+  \item[\texttt{[\&, data]}] Capture all used variables by reference, except for \texttt{data} which is captured by value.
+\end{description}
+
+Because a lambda is an object with a lifetime that may exist longer than the scope in which it was declared, some caution is necessary in their use. For example, a lambda may be returned from a function, with the lambda having attempted to capture a local function variable by reference. Later on, when the lambda function is invoked and it attempts to access the reference capture, it will either use an invalid value or cause an exception because the scope for the referenced local variable no longer exists. This is illustrated in \FigureCode \ref{chapter:cpp11:lambdas:capture-example}.
+
+\begin{code}[caption={Lambda Capture}, label=chapter:cpp11:lambdas:capture-example]
+std::function<uint32_t ()> makeLambda(uint32_t value)
+{
+  uint32_t local = value;
+  return [&] () { return local; };
+}
+
+void badLambdaCapture()
+{
+  auto badLambda = makeLambda(8);
+  uint32_t result = badLambda();
+  std::cout << result << std::endl;
+}
+\end{code}
+
+The lambda function captures the local variable \texttt{local} by reference, with lambda then returned from the function. When this code is executed some large number gets displayed, on my computer \texttt{3435973836}, rather than seeing the value of \texttt{8} written to the console. The program did not throw an exception, it returned a value stored at a no longer valid memory location. Because it didn't throw an exception, you can imagine the potential for a subtle bug to be introduced. If the capture had been by value, \texttt{return [=] () \{ return local; \};}, the problem would not have happened.
+
+Notice that it is possible to define a \texttt{std::function} type that matches the lambda signature as the \texttt{makeLambda} function return type. In this example, the lambda accepts no parameters and has a return type of \texttt{uint32\_t}, implied in the lambda function. Given these two pieces, a \texttt{std::function<uint32\_t ()>} is defined as the return type for the function. While the type of a lambda is considered \textit{ineffible} (too great to express), it is possible to use \texttt{std::function} as a means for expressing the type of a lambda.
+
+\section{Threading \& Synchronization}\label{chapter:cpp11:threading}
+
+Threading and synchronization are one of the biggest features added to the C++11 language and standard library, also extremely welcome. These capabilities come from the Boost libraries with only a few modest changes; if you are familiar with Boost threading and synchronizaton, you know 90\% of the C++11 features. This section covers creating threads, joining threads, several related thread utilities, and the use of mutexes for synchronization.
+
+\subsection{Thread Creation}\label{chapter:cpp11:threading:creation}
+
+Let's start with a simple example of creating a thread as shown in \FigureCode \ref{chapter:cpp11:threading:simple}.
+
+\begin{code}[caption={Simple Thread}, label=chapter:cpp11:threading:simple]
+void simpleThread()
+{
+  auto report = []()
+  {
+    std::cout << "This executed from thread: ";
+    std::cout << std::this_thread::get_id();
+    std::cout << std::endl;
+  };
+
+  std::thread myThread(report);
+  myThread.join();
+
+  report();
+}
+\end{code}
+
+This example starts by defining a lambda that reports the id of the thread from which it executed. The lambda uses \texttt{std::this\_thread::get\_id()} to obtain the id of the thread. Next, a thread is created with the \texttt{std::thread myThread(report);} statement. \texttt{myThread} is the name of the thread instance. A \texttt{std::thread} accepts a function as its constructor parameter, this function is called as soon as the thread is created, the thread is terminated when the function exits. The \texttt{myThread.join();} statement causes the main application thread to wait for the termination of the thread referenced by \texttt{myThread}. Finally, to demonstrate there really are two different threads, the \texttt{report} lambda is called by the main application thread to report its id. A run of this function will look like \FigureConsole \ref{chapter:cpp11:threading:simple-output}.
+
+\begin{console}[caption={Simple Thread Output}, label=chapter:cpp11:threading:simple-output]
+This executed from thread: 3552
+This executed from thread: 9468
+\end{console}
+
+\subsection{Thread Utilities}\label{chapter:cpp11:threading:utilities}
+
+There are several thread utilities that are useful to know. The previous section showed \texttt{std::this\_thread::get\_id()}, there are also utilities to sleep, discover how many CPU cores are on the system, and perform timing. Some of these are directly part of the \texttt{<thread>} library, others are supported through the \texttt{<chrono>} library.
+
+\subsubsection{Thread Sleep}\label{chapter:cpp11:threading:utilities:sleep}
+
+\texttt{std::thread} provides a \texttt{sleep\_for} function that accepts a duration. The duration is a \texttt{std::chrono::duration} type. At a simple level, \texttt{std::chrono::duration} can be defined in terms of hours, minutes, seconds, milliseconds, or nanoseconds. It is also possible to define which kind of system clock is used to measure the time, for most purposes the default clock is sufficient. The code in \FigureCode \ref{chapter:cpp11:threading:utilities:sleep-example} demonstrates how to use \texttt{sleep\_for}, measuring the time to sleep in millisecond using a \texttt{std::chrono::duration}.
+
+\begin{code}[caption={Thread Sleep}, label=chapter:cpp11:threading:utilities:sleep-example]
+void sleepingThread()
+{
+  std::thread myThread(
+    []()
+    {
+      std::cout << "Going to sleep for two seconds...";
+      std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+      std::cout << "awakened" << std::endl;
+    });
+
+  myThread.join();
+}
+\end{code}
+
+When executed, the \texttt{Going to sleep for 2 seconds...} message is displayed, then two seconds later, \texttt{awakened} appears.
+
+\subsubsection{CPU Cores}\label{chapter:cpp11:threading:utilities:cpucores}
+
+When developing scalable applications it is critical to be able to determine at runtime the number of available CPU cores on a system. This capability is now provided by \texttt{std::thread} through the \texttt{hardware\_concurrency} function. This is a static function that returns the number of CPU cores, the total of all system cores, including hyper-threaded or logical cores. The documentation for this function notes this is only an estimate and may not be able to be determined. In the case it can not be determined, a 0 is returned. The code in \FigureCode \ref{chapter:cpp11:threading:utilities:cpucores-example} demonstrates how to use the \texttt{hardware\_concurrency} function.
+
+\begin{code}[caption={Number of CPU Cores}, label=chapter:cpp11:threading:utilities:cpucores-example]
+void howManyCores()
+{
+  auto coreCount = std::thread::hardware_concurrency();
+
+  std::cout << "This system has " << coreCount;
+  std::cout << " CPU cores" << std::endl;
+}
+\end{code}
+
+When executed on my computer this code segment reported, \texttt{This system has 12 CPU cores}. The computer on which this was executed has 6 CPU cores, each of which is also hyper-threaded. There isn't a way using the C++11 standard library to determine which of the 12 are the hyper-threaded cores, or even if any of them are hyper-threaded. For the purposes of this book, it doesn't matter, the scalability techniques work well with asymmetric CPU capabilities, and that is really the point of the book, \textit{scalability}.
+
+\subsection{Timing}\label{chapter:cpp11:utilities:timing}
+
+Another tool that is useful in building fault-tolerant systems is the ability to time how long something has taken. Three capabilities are necessary to support this. The ability to capture the current system time, a data type to represent the time, and the ability to represent the difference between two times. These are all provided by the \texttt{<chrono>} library. The \texttt{system\_clock} allows the current system time to be taken, the \texttt{time\_point} class represents a point in time, and the \texttt{duration} class represents the difference between two points in time.
+
+In order to take a snapshot of the current system time the \texttt{now} function is called from the \texttt{system\_clock}. The type returned from a call to \texttt{now} is \texttt{time\_point}. A call to capture the system time and store the result looks like \FigureCode \ref{chapter:cpp11:threading:utilities:timepoint}.
+
+\begin{code}[caption={Time Point}, label=chapter:cpp11:threading:utilities:timepoint]
+std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+\end{code}
+
+Alternatively, using \texttt{auto} looks like \FigureCode \ref{chapter:cpp11:threading:utilities:timepoint-inferred}.
+
+\begin{code}[caption={Time Point Inferred}, label=chapter:cpp11:threading:utilities:timepoint-inferred]
+auto now = std::chrono::system_clock::now();
+\end{code}
+
+The \texttt{time\_point} class overloads the minus operator, returning a \texttt{duration} type. The \texttt{duration} type takes a little more work to use, but is simplified through the use of some pre-defined helper types. The \texttt{duration} class is templated on two types. The first is a signed integral type used to store the duration \textit{tick count}, and the second is a \textit{period} that represents the number of seconds between ticks. At first glance this sounds confusing, but begins to make sense after only a few uses.
+
+The definition of a duration looks like \FigureCode \ref{chapter:cpp11:threading:utilities:duration-type}.
+
+\begin{code}[caption={Duration Type}, label=chapter:cpp11:threading:utilities:duration-type]
+template<class S, T>
+class duration;
+\end{code}
+
+Where \texttt{S} is the storage type, and \texttt{T} is the number of seconds between ticks. \FigureCode \ref{chapter:cpp11:threading:utilities:duration-example} shows an example of how to define a duration that stores milliseconds.
+
+\begin{code}[caption={Duration Example}, label=chapter:cpp11:threading:utilities:duration-example]
+std::chrono::duration<int64_t, std::ratio<1, 1000>> millisecs;
+\end{code}
+
+In order to get the number of seconds between ticks \texttt{std::ratio<1, 1000>} is used, rather than a floating point type, this allows exact integral steps to be defined. This can be further simplified by using one of the pre-defined \texttt{std::ratio} types, for this example, \texttt{std::milli}. The \texttt{<ratio>} header file defines a number of commonly used ratio types. The following is a list of some of these helper types:
+
+\begin{itemize}
+  \item \texttt{std::chrono::nanoseconds}
+  \item \texttt{std::chrono::microseconds}
+  \item \texttt{std::chrono::milliseconds}
+  \item \texttt{std::chrono::seconds}
+  \item \texttt{std::chrono::minutes}
+  \item \texttt{std::chrono::hours}
+\end{itemize}
+
+Putting all of the pieces from this chapter together, \FigureCode \ref{chapter:cpp11:threading:timed-fibonacci} shows how to time the computation of a series of \textit{Fibonacci} numbers.
+
+\begin{code}[caption={Timed Fibonacci}, label=chapter:cpp11:threading:timed-fibonacci]
+void timeFibonacci()
+{
+  std::function<uint32_t (uint16_t )> fib;
+  fib = [&fib](uint16_t n)->uint32_t 
+  { 
+    if (n == 0) return 1;
+    if (n == 1) return 1;
+
+    return fib(n - 1) + fib(n - 2);
+  };
+
+  auto start = std::chrono::system_clock::now();
+
+  for (auto n: IRange<uint16_t>(0, 10))
+  {
+    std::cout << "Fibonacci of " << n << " is ";
+    std::cout << fib(n) << std::endl;
+  }
+
+  auto end = std::chrono::system_clock::now();
+
+  std::chrono::nanoseconds difference = end - start;
+
+  std::cout << "Time to compute is: " << difference.count();
+  std::cout << " nanoseconds" << std::endl;
+}
+\end{code}
+
+The function starts by defining a lambda function that is stored into the \texttt{fib} variable. The reason for declaring and then assigning is that the compiler won't allow \texttt{fib} to be captured in the same statement as it is declared. Pay careful attention to the way the capture of the \texttt{fib} function is captured into the lambda and used. The \texttt{fib} function is captured and then called inside the lambda into which it is captured, we are recursively calling into a lambda! The next step is to take a snapshot of the system clock, before entering the loop that computes some fibonacci numbers. The \texttt{IRange} class creates an iterated range over which the range-based for loop can operate\footnote{The code for \texttt{IRange} is described in Appendix \ref{appendix:misc-code}}. Once the loop completes another snapshot of the current time is taken, the difference is computed, and finally the duration is reported to the console.
+
+It is relevant to point out that the \texttt{system\_clock} is not really capable of measuring individual nanoseconds, but is good enough for general use. The most accurate clock provided by \texttt{std::chrono} is the \texttt{high\_resolution\_clock}, but note that it is often only an alias for the \texttt{system\_clock}.
+
+\subsection{Mutexes}
+
+Mutexes are one tool used to synchronize operations among threads. C++11 includes a new library, \texttt{<mutex>}. This library comes directly from Boost and if you are familiar with its usage from Boost, you already know everything you need. There are two parts to effective use of C++11 mutexes. The first is the \texttt{mutex} class that represents the mutex, the second is the \texttt{lock\_guard} wrapper which provides RAII\footnote{\href{http://en.wikipedia.org/wiki/Resource\_Acquisition\_Is\_Initialization}{http://en.wikipedia.org/wiki/Resource\_Acquisition\_Is\_Initialization}} style usage; each of these are detailed next.
+
+The \texttt{mutex} class is what you expect in a mutex. It provides three member functions for locking and unlocking: \texttt{.lock}, \texttt{.try\_lock}, and \texttt{.unlock}.
+
+\begin{description}
+\item[\texttt{.lock}] If the mutex is available the lock is taken, otherwise it blocks until the lock becomes available.
+\item[\texttt{.try\_lock}] If the mutex is available the lock is taken and returns \texttt{true}, otherwise it returns \texttt{false}.
+\item[\texttt{.unlock}] Unlocks the mutex.
+\end{description}
+
+The code in \FigureCode \ref{chapter:cpp11:threading:simple-mutex} shows a sample use of locking and unlocking of a mutex.
+
+\begin{code}[caption={Simple Mutex}, label=chapter:cpp11:threading:simple-mutex]
+void synchronize(std::mutex& mutex)
+{
+  myMutex.lock();
+  //
+  // Perform some operation that requires synchronization
+  //
+  myMutex.unlock();
+}
+\end{code}
+
+Instead of using explicit locking and unlocking I strongly recommend the use of \texttt{std::lock\_guard} which, as noted earlier, provides RAII style mutex usage. When a \texttt{std::lock\_guard} object is created it takes ownership of the mutex and releases it upon destruction. In other words, on its constructor \texttt{std::lock\_guard} calls \texttt{.lock} and its destructor calls \texttt{.unlock}. A rewrite of \FigureCode \ref{chapter:cpp11:threading:simple-mutex} to use \texttt{std::lock\_guard} is shown in \FigureCode \ref{chapter:cpp11:threading:raii-mutex}.
+
+\begin{code}[caption={\texttt{lock\_guard} Mutex}, label=chapter:cpp11:threading:lock-guard-mutex]
+void synchronize(std::mutex& mutex)
+{
+  std::lock_guard<std::mutex> lock(myMutex);
+  //
+  // Perform some operation that requires synchronization
+  //
+}
+\end{code}
+
+The code in \FigureCode \ref{chapter:cpp11:threading:raii-mutex} is a little bit simpler, but that is not the primary reason for this approach. The reason it is more robust is that the lock isn't released until the \texttt{std::lock\_guard} object goes out of scope. Consider the code shown in \FigureCode \ref{chapter:cpp11:threading:lock-guard-mutex2}. 
+
+\begin{code}[caption={\texttt{lock\_guard} Mutex}, label=chapter:cpp11:threading:lock-guard-mutex2]
+uint32_t synchronize(std::mutex& mutex, uint32_t& param)
+{
+  std::lock_guard<std::mutex> lock(myMutex);
+  param++;
+
+  return param;
+}
+\end{code}
+
+In this example the function receives a parameter by reference, increments its value and uses it as a return value. Writing this same code using explicit locking and unlocking is more cumbersome and potentially error prone. The RAII approach is correct, more elegant, and easier to read.
+
+A complete example of synchronizing threads to ensure correct updating of a resource is shown in \FigureCode \ref{chapter:cpp11:threading:raii-mutex}.
+
+\begin{code}[caption={Full RAII Mutex Example}, label=chapter:cpp11:threading:raii-mutex]
+void demoThreadMutex()
+{
+  uint16_t resource(0);
+  std::mutex mutex;
+
+  auto report = [](uint16_t value)
+  {
+    std::cout << "The value is: " << value << std::endl;
+  };
+
+  auto reportValues =
+    [&resource, &mutex, report](bool reportEvens)
+    {
+      while (resource < 10)
+      {
+        auto isEven = (resource % 2 == 0);
+        if (isEven == reportEvens)
+        {
+          std::lock_guard<std::mutex> lock(mutex);
+          resource++;
+          report(resource);
+        }
+      }
+    };
+
+  std::thread thread1(threadFunction, true);
+  std::thread thread2(threadFunction, false);
+
+  thread1.join();
+  thread2.join();
+}
+\end{code}
+
+The example begins by defining a shared resource and mutex. This is followed by defining reporting and thread function lambdas. The thread lambda uses the resource, mutex, and \texttt{report} lambda to synchronize, update, and report the value of the resource. Two threads are then created, both using the same thread function/lambda, with one updating even values, the other updating odd values. Finally the two threads are joined, causing the function to only exit when both threads have completed. Not only does this code demonstrate the use of lambdas, threading, and mutexes, it also shows how concise C++11 code can be.
+
+The \texttt{std::thread} constructor takes as the first parameter the name of a a start function (or lambda) to begin execution. The remaining constructor parameters become parameters to the start function. In this example, the \texttt{threadFunction} lamba expects a \texttt{bool} parameter.
+
+\subsection{Atomic Operations}
+
+In addition to support for mutexes, which can be used to create atomic operations, C++11 provides specific support for atomic operations through the \texttt{<atomic>} library. This library defines a template class \texttt{std::atomic} that can be used on any type that is \texttt{TriviallyCopyable}\footnote{http://en.cppreference.com/w/cpp/concept/TriviallyCopyable}. Atomic operations are already defined for primitive C++ types, such as \texttt{bool}, \texttt{uint8\_t}, \texttt{uint16\_t}, and so on. The use of \texttt{std::atomic} on custom types is beyond the scope of this book, the focus here is on integral types.
+
+There are a large number of operations that can be performed on the atomic types, of particular interest for our purposes is the ability to set, increment, decrement, and read values. The code shown in \FigureCode \ref{chapter:cpp11:threading:simple-atomic} shows how to define and use an atomic type.
+
+\begin{code}[caption={Simple Atomic}, label=chapter:cpp11:threading:simple-atomic]
+std::atomic<uint16_t> value(0);
+
+value++;
+std::cout << value << std::endl;
+\end{code}
+
+From the example in \FigureCode \ref{chapter:cpp11:threading:simple-atomic} it is possible to see how easy the types are to declare and use. Other than the declaration, the type is used as expected, and guarantees operations on it are performed atomically. Instead of using the template syntax, the \texttt{<atomic>} library includes definitions for the standard integral types. The code in \FigureCode \ref{chapter:cpp11:threading:simple-atomic} could have declared the type using \texttt{std::atomic\_uint16\_t}. My personal preference is to use the template syntax for no reason other than that is just what I prefer.
+
+To demonstrate the use of atomics in a multi-threaded context, the example from \FigureCode \ref{chapter:cpp11:threading:raii-mutex} is rewritten to use \texttt{std::atomic} for the resource instead of using mutex operations, the revised code is shown in \FigureCode \ref{chapter:cpp11:threading:full-atomic}.
+
+\begin{code}[caption={Complete Atomic Example}, label=chapter:cpp11:threading:full-atomic]
+void demoAtomic()
+{
+  std::atomic<uint16_t> resource(0);
+
+  auto report = [](uint16_t value)
+  {
+    std::cout << "The value is: " << value << std::endl;
+  };
+
+  auto threadFunction =
+    [&resource, report](bool reportEvens)
+    {
+      while (resource < 10)
+      {
+        auto isEven = (resource % 2 == 0);
+        if (isEven == reportEvens)
+        {
+          resource++;
+          report(resource);
+        }
+      }
+    };
+
+  std::thread thread1(threadFunction, true);
+  std::thread thread2(threadFunction, false);
+
+  thread1.join();
+  thread2.join();
+}
+\end{code}
+
+While the use of \texttt{std::atomic} cleans up the code by eliminating the need to manually use mutexes each time the resoure is accessed, that is not the most important reason for using the library. The most important reason is for performance. As with all things, context matters, but for the kind of uses presented in this book, \texttt{std::atomic} can range anywhere from three to ten times faster than \texttt{std::mutex}. %http://www.baptiste-wicht.com/2012/07/c11-synchronization-benchmark/
+
+\subsection{Condition Variables}
+
+Condition variables are used to notify, or signal, a thread or threads that some \textit{condition} has taken place and that it is okay to continue based upon the notification. In C++11 this is done through a \texttt{std::condition\_variable}. Specifically, a \texttt{std::condition\_variable} blocks until it is signaled. It takes more discussion and code to explain and demonstrate the use of condition variables, therefore this section is longer than most of the others in this chapter. While it is a little longer, it is also a useful way to finish this chapter because most of the new C++11 features presented in this chapter are utilized. Take the time to read through the associated example and fully understand how condition variables work, they are a key building block for creating scalable, efficient, multi-threaded, and distributed applications.
+
+A typical paradigm for the use of \texttt{std::condition\_variable}s is in a \textit{producer-consumer} application. One or more producers create resources that are consumed by one or more consumers; the producers place the resources into a fixed sized container. If the container is full, producers should efficiently wait until there is room in the container. Similarly, consumers remove resources from the container and should efficiently wait if the container is empty. It is through the use of \texttt{std::condition\_variable}s that it is possible to have the producers and consumers efficiently wait or work based upon the state of the resource container. The way this is done is to define a \textit{signal}, a \texttt{std::condition\_variable}, that indicates when the container has room to place new resources, along with another that indicates when there are resources available to consume. The next series of code segments illustrate the definition of such a resource container in combination with a single producer and multiple consumers.
+
+\subsubsection{The Resource Container}
+
+The resource container is the most crucial component of the design. It provides the space where resources are placed and consumed, along with coordinating access among the various producers and consumers. The code in \FigureCode \ref{chapter:cpp11:threading:condition:container-decl} shows a portion of the \texttt{Resource} class declaration. It is a template class, allowing any data type to be the resource. It defines a \texttt{std::array} for storing resources, along with integers that describe attributes of the storage (it is a circular buffer). Additionally, a \texttt{std::mutex} is defined to coordinate safe multi-threaded access, along with two \texttt{std::condition\_variable}s used to signal when there is room to place something into the container, and when there is a resource that can be consumed.
+
+\begin{code}[caption={Container Declaration}, label=chapter:cpp11:threading:condition:container-decl]
+template <typename T>
+class Resource
+{
+public:
+  Resource() : m_front(0), m_back(0), m_count(0) {}
+
+  void add(T value) {...}
+  T remove() {...}
+...
+private:
+  std::array<T, 10> m_data;
+  std::uint8_t m_front;
+  std::uint8_t m_back;
+  std::uint8_t m_count;
+
+  std::mutex m_mutex;
+  std::condition_variable m_isRoom;
+  std::condition_variable m_isData;
+};
+\end{code}
+
+The next piece of the resource container is the code that implements the \texttt{add} method. The \texttt{add} method must wait until there is space available to place a new resource, and do so efficiently.
+
+\begin{code}[caption={\texttt{add} Method}, label=chapter:cpp11:threading:condition:container-add]
+void add(T value)
+{
+  std::unique_lock<std::mutex> lock(m_mutex);
+  // Have to wait until m_data is has room
+  m_isRoom.wait(lock,
+    [this]()
+    {
+      // Verify there really is room to place
+      // something...could be spurious wakeup.
+      return m_count != m_data.size();
+    });
+  m_data[m_back] = value;
+  m_back = (m_back + 1) % m_data.size();
+  m_count++;
+  // Signal the has data condition
+  {
+  	std::unique_lock<std::mutex> lockNotify(m_mutex);
+  	m_isData.notify_one();
+  }
+}
+\end{code}
+
+Notice the use of a \texttt{std::unique\_lock} instead of a \texttt{std::lock\_guard}; this is very important! The thread obtaining a \texttt{std::unique\_lock} does not have to own the mutex, ownership can be transferred. If (when) the lock is taken in the constructor and then is used with a \texttt{std::condition\_variable}, the thread invoking the \texttt{std::condition\_variable} takes ownership and decides whether or not the lock is necessary. If the lock isn't necessary (e.g., when the condition isn't signaled) the lock is given up, which allows another thread's \texttt{std::unique\_lock} or \texttt{std::condition\_variable} to take ownership; yes, this is complex stuff. This will become a little more clear when the code for the \texttt{remove} method is shown next.
+
+Getting back to the \texttt{add} method: A lock on the mutex is taken, then a wait is performed on the \texttt{m\_isRoom} condition. The \texttt{.wait} method of a \texttt{std::condition\_variable} takes a predicate that indicates when the condition is true. In the case of the resource container, the condition is true as long as the count of items in the storage is not equal to the max storage capacity. Until this condition becomes true, the \texttt{add} method is blocked from continuing. Once the condition is signaled and the predicate is true, the lock on the mutex is obtained and the method continues. The last statement in the method uses the \texttt{.notify\_one} method to signal the other condition, indicating there is now a resource that can be consumed. While the C++ standard doesn't appear to require the acquisition of a lock on the mutex before signaling the condition, in practice (on Linux, not on Windows), I have found it necessary to ensure correct signaling; this is most likely due the the use of the PThreads library as the underlying implementation.
+
+Pay attention to the comment in the \texttt{add} method regarding a \textit{suprious wakeup}. It turns out the underlying implementation of \texttt{std::condition\_variable}s can result in the wait state waking up even when the condition has not been signaled (the reasons this can happen are beyond the scope of this book). There is an overloaded version of the \texttt{.wait} method that does not require a predicate, but still has the same spurious wakeup issue. The solution in that case is to use a loop around the \texttt{wait}. By using the overload that requires a predicate, the condition won't fall through until the predicate indicates it is okay to move forward; eliminating the need to write a looping structure. I recommend only the use of the predicate overload, it is much easeir to write correct code and understand later when the time comes to return to the code.
+
+The \texttt{remove} method for the resource container is shown in \FigureCode \ref{chapter:cpp11:threading:condition:container-remove}. This code is fundamentally similar, with respect to coding techniques, to the \texttt{add} method, except written from the perspective of removing an item from the container. The same lock, then conditional wait is used, followed by removing the next value, and then finishing by signaling the \texttt{m\_isRoom} condition that notifies any pending producers new space is available.
+
+\begin{code}[caption={\texttt{remove} Method}, label=chapter:cpp11:threading:condition:container-remove]
+T remove()
+{
+  std::unique_lock<std::mutex> lock(m_mutex);
+  // Have to wait until m_data contains something
+  m_isData.wait(lock,
+    [this]()
+    {
+      // Verify there really is something to
+      // work on...could be spurious wakeup.
+      return m_count > 0;
+    });
+  T value = m_data[m_front];
+  m_front = (m_front + 1) % m_data.size();
+  m_count--;
+  // Signal the has room condition
+  {
+  	std::unique_lock<std::mutex> lockNotify(m_mutex);
+    m_isRoom.notify_one();
+  }
+
+  return value;
+}
+\end{code}
+
+The \texttt{add} and \texttt{remove} methods take care of the heavy lifting, making writing producer and consumer code almost trivial to write.
+
+\subsubsection{Producers and Consumers}
+
+Producers add items to the resource container, while consumers remove items. Lambdas for producers and consumers are found in \FigureCode \ref{chapter:cpp11:threading:condition:lambdas}. 
+
+\begin{code}[caption={The Producer}, label=chapter:cpp11:threading:condition:lambdas]
+Resource<uint32_t> resources;
+
+auto producer =
+  [&resources](uint8_t howMany)
+  {
+    for (auto item : IRange<uint8_t>(1, howMany))
+    {
+      resources.add(item);
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+  };
+
+auto consumer =
+  [&resources](uint8_t howMany)
+  {
+    for (auto item : IRange<uint8_t>(1, howMany))
+    {
+      std::cout << "Thread: " << std::this_thread::get_id();
+      std::cout << " Consumed: " << resources.remove();
+      std::cout << std::endl;
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+  };
+\end{code}
+
+The only parts of these two lambdas that relate to the use of the resource buffer are the \texttt{resources.add(item)} and \texttt{resources.remove()} method calls. The purpose of the \texttt{sleep\_for} statements is to help demonstrate a single producer that can produce faster than any one consumer, which creates the need to have more than one consumer in order to keep up with a single producer.
+
+The final piece of this demonstration is to put it all together by creating a single producer along with multiple consumers, \FigureCode \ref{chapter:cpp11:threading:condition:threads} shows this. It is as simple as instantiating the five different threads, one producer and four consumers, and then calling join on each of them to allow all to complete their work.
+
+\begin{code}[caption={The Producer}, label=chapter:cpp11:threading:condition:threads]
+std::thread producer1(producer, 100);
+std::thread consumer1(consumer, 25);
+std::thread consumer2(consumer, 25);
+std::thread consumer3(consumer, 25);
+std::thread consumer4(consumer, 25);
+
+producer1.join();
+consumer1.join();
+consumer2.join();
+consumer3.join();
+consumer4.join();
+\end{code}
+
+\section{Summary}\label{chapter:cpp11:summary}
+
+C++11 is a significant step forward for the language and the associated development community. The updates to the language and the standard library work together to provide two things of interest for the techniques presented in this book, concise code and better cross-platform support. Additions like the range-based for loop and lambdas work to enable more concise and readable code. The use of smart pointers relieves a great burden from the developer by providing automatic lifetime management of dynamically allocated objects. The adoption of threading and synchronization capabilities are a huge benefit for writing cross-platform code. The benefits of these new additions are well demonstrated throughout the remainder of this book.

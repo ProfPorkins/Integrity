@@ -1,0 +1,456 @@
+% Copyright © 2015 by James Dean Mathias
+% All Rights Reserved
+
+\chapter{Scalability - Task Dependencies}\label{chapter:scalable-dag}
+
+For many applications, some tasks must wait to be executed until other tasks have completed their work. This chapter introduces the concept of dependencies among tasks, that one or more tasks must complete before one or more other tasks can begin. As with the previous chapter using priority, this capability provides a developer another, very powerful, tool to aid in scheduling of computational tasks. Similarly, the impact on the task framework is relatively modest, and reasonably straightfoward in the application code. The biggest change is with the addition of a complex data structure to support the task dependencies. The bulk of this chapter is devoted to describing the data stucture, algorithms, and code that provide the task dependency capability. The code presented in this chapter is modified from Chapter \ref{chapter:scalable-task-based}, extended to support dependencies between tasks.
+
+% Need to find a better place for this,but don't throw it away
+A two-fold goal with adding a capability to have task dependencies is to expose a powerful capability for application developers, while keeping the interface for doing so as simple as possbile. There is a lot of complexity in the underlying data structure and algorithms, and care must be taken to not expose unnecessary complexity to application code. Towards this goal, the code presented in this chapter only slightly modifies the interface for adding a task without dependencies, and adds a straightfoward interface for adding tasks with dependencies.
+
+\section{Concepts}\label{chapter:dag:concepts}
+
+There are two major components to creating the task dependency capability. The first is the data structure, which describes and maintains the dependencies among tasks. The second is an algorithm, or set of algorithms, used to operate on the data structure to determine the next available task, if any. Both of these are detailed in the next two sections.
+
+\subsection{Directed Acyclic Graph}\label{chapter:dag:concepts:dag}
+
+A Directed Acyclic Graph (DAG)\footnote{http://en.wikipedia.org/wiki/Directed\_acyclic\_graph} is a directed graph that has no cycles. \FigureGeneral \ref{chapter:dag:concepts:dag-figure} shows an example DAG. The term \textit{directed} means that the edges from one node in the graph to other nodes have direction, and only one direction. The term \textit{acyclic} means that it isn't possible to start at one node, follow a sequence of edges, and have that sequence result in returning to the starting node. In the context of task dependencies, these features mean it is possible to describe tasks (nodes), with dependencies (edges) to other tasks, and ensure that no tasks are either directly or indirectly dependent upon themselves.
+
+\begin{figure}
+	\centering
+		\begin{tikzpicture}[scale=1]
+			\tikzstyle{VertexStyle} = [shape = ellipse, minimum width = 4ex, draw]
+			\tikzstyle{EdgeStyle}   = [->,>=stealth']
+			\SetGraphUnit{2}
+			\Vertex{4}
+				\NOWE(4){1}
+				\NO(4){2}
+				\NOEA(4){3}
+				\EA(4){5}
+				\SO(4){6}
+			\Edges(4,1) \Edges(4,2) \Edges(4,3)
+			\Edges(5,2)
+			\Edges(6,4)
+			\Edges(6,5)
+		\end{tikzpicture}
+	\caption{Directed Acyclic Graph}\label{chapter:dag:concepts:dag-figure}
+\end{figure}
+
+As an application generates tasks it can be the case that one group of tasks is dependent upon another group, a third group of tasks is dependent upon a single task, and there may also be many tasks with no dependencies. Strictly speaking, a DAG is a single connected graph, which is not sufficient to represent this scenario. What is necessary, instead, is a data structure that has the ability to contain many locally connected graphs, and individual nodes, something that might be called a multi-DAG. An example of such a DAG is shown in \FigureGeneral \ref{chapter:dag:concepts:multi-dag-figure}. For the purpose of communication ease, the term DAG is used throughout this chapter and the book, with the intention that it means a multi-DAG, or a collection of DAGs.
+
+\begin{figure}
+	\centering
+		\begin{tikzpicture}[scale=1]
+			\tikzstyle{VertexStyle} = [shape = ellipse, minimum width = 4ex, draw]
+			\tikzstyle{EdgeStyle}   = [->,>=stealth']
+			\SetGraphUnit{2} 
+			\Vertex{3}
+				\NOWE(3){1}
+				\NOEA(3){2}
+				\EA(2){4}
+				\SOEA(4){6}
+				\NOEA(6){5}
+				\EA(3){7}
+				\WE(6){8}
+			\Edges(3,1) \Edges(3,2)
+			\Edges(6,4) \Edges(6,5)
+		\end{tikzpicture}
+	\caption{Multi-DAG}\label{chapter:dag:concepts:multi-dag-figure}
+\end{figure}
+
+\subsection{Scheduling Algorithm}\label{chapter:dag:concepts:algorithm}
+
+The DAG is used to represent the task dependencies and an algorithm is needed to traverse the DAG to determine the next available task. The standard first-thought answer to this part of the problem is to use a topological sort\footnote{http://en.wikipedia.org/wiki/Topological\_sorting} to determine the order; given a DAG, a topological sort will provide a valid ordering of the tasks. For any given DAG, there may be multiple correct orderings, any one of which is valid with respect to scheduling. For example, the DAG in \FigureGeneral \ref{chapter:dag:concepts:dag-figure} has a possible ordering of: 1, 2, 3, 4, 5, 6. It also has an alternative, and just as correct, ordering of: 3, 1, 2, 5, 4, 6.
+
+For a single processor system, this is easy enough, simply compute the ordering and feed in that order. However, we are concerned with scalability over a number of processing cores. Therefore, additional insight is necessary to not only build a valid framework mechansim, but also consider application level concerns for task dependencies.
+
+Consider a system with three CPU cores, and also assume equal computational effort for each of the tasks. For \FigureGeneral \ref{chapter:dag:concepts:dag-figure} the ordering of the tasks looks like: (1, 2, 3), (4, 5, x), and (6, x, x). In the first step, all three CPU cores are busy, in the second step, only two of the CPU cores are busy because task 6 has to wait for tasks 4 and 5 to complete. Finally, in the third step, only one CPU core is busy. Again, this is important to understand not only for the framework in how it responds to worker thread requests for something from the work queue, but also for application level design, ensuring there aren't too many dependencies between tasks, resulting in low system utilization.
+
+There is still an additional level of complexity that exists in an operational system. In an interactive (and most others) application, the DAG is dynamic, with tasks coming and going throughout the application lifetime, in addition to tasks having differing levels of computational complexity. For example, going back to the example from \FigureGeneral \ref{chapter:dag:concepts:dag-figure}, let's say that two more tasks, task 7 and 8, show up while tasks 1, 2, and 3 are being computed.  The overall ordering would then look like: (1, 2, 3), (4, 5, 7), and (6, 8, x). Notice that task 7 is computed before task 6, even though it arrived afterwards. A mix of dependent and independent tasks offer the best opportunity for scalability, while also increasing the complexity of the scheduling framework.
+
+The standard topological sorting will correctly handle the ordering of the queue at any time we wish to take a snapshot for a full connected DAG. However, it doesn't handle operational situations with tasks coming and going, some issues with respect to concurrency, or multi-DAGs. What is needed is an algorithm that provides topological-like sorting, but in the context of a dynamic multi-DAG.
+
+The answer to the problem involves two modifications. The first is to keep track of tasks that have been removed from the queue, but have not yet completed execution. This is required to ensure tasks that depend upon removed but not completed tasks are not selected for execution. The second is to take the next available item from the DAG, rather than computing the ordering of all items in the queue. This requires the algorithm check to ensure the task has no dependencies on other tasks awaiting execution, but also that it has no dependencies on tasks that have been removed but have not yet completed execution. The result is still a topological-like sorting, but also correctly manages the additional complexity of an operational context.
+
+\section{Building Blocks}\label{chapter:dag:building-blocks}
+
+This section of the chapter walks through the implementation, highlighting the changes needed to transform the framework code from Chapter \ref{chapter:scalable-task-based} into one that supports task dependencies. The changes to the task scheduling framework are moderate, and involve changing the interface through which tasks are added. The changes to the application are similarly moderate, involving changes to the Mandelbrot tasks, along with changing how the application adds tasks for execution. The updated interactive Mandelbrot viewer is detailed in Section \ref{chapter:dag:app-demo}.
+
+\subsection{Directed Acyclic Graph}\label{chapter:dag:impl:dag}
+
+As with the introduction of priority to the framework, the most interesting part of the changes introduced with this chapter is the implementation of the DAG; noting the implementation is that of the multi-DAG described earlier. There is no ready-made standard library data structure available, instead it is necessary to build a custom data structure. Rather than starting from scratch, and keeping with the theme of this book in taking advantage of the C++ language and framework, a data structure is composed using existing standard library components. Specifically, the \texttt{std::unordered\_map} and \texttt{std::unordered\_set} are used to perform a lot of heavy lifting, which signficantly reduces the amount of custom code. The name of the new data structure is \texttt{ConcurrentDAG}. Like the data structures introduced in the previous two chapters, as its name suggests, it is thread-safe. The remainder of this section details the implementation.
+
+\subsubsection{Task Identification \& Ordering}
+
+With the ability to define dependencies between tasks, some way is needed to uniquely identify a task. Additionally, the scheduling system needs to have a way of knowing the time-based ordering of tasks. In order to achieve this, I have chosen to add an \texttt{uint32\_t} identifier to the \texttt{Task} class. The revised \texttt{Task} declaration and constructor implementation are found in \FigureCode \ref{chapter:dag:impl:task}.
+
+\begin{code}[caption={Revised \texttt{Task} Class}, label=chapter:dag:impl:task]
+class Task
+{
+public:
+  explicit Task(std::function<void()> onComplete);
+  virtual ~Task()  {}
+
+  uint32_t getId() const { return m_id; }
+  virtual void execute() = 0;
+  void complete()        { if (m_onComplete) { m_onComplete(); } }
+
+protected:
+  uint32_t m_id;
+
+private:
+  std::function<void ()> m_onComplete;
+};
+
+Task::Task(std::function<void ()> onComplete) :
+  m_onComplete(onComplete)
+{
+  static uint32_t currentId = 1;
+  static std::mutex myMutex;
+
+  std::lock_guard<std::mutex> lock(myMutex);
+
+  m_id = currentId++;
+
+  if (currentId == std::numeric_limits<uint32_t>::max())
+  {
+    currentId = 1;
+  }
+}
+\end{code}
+
+The key part of this class is the technique used to assign the unique id. A \texttt{static} \texttt{currentId} is intially assigned a value of \texttt{1}. The first \texttt{Task} instance is assigned this value, then the \texttt{currentId} is incremented. This serves two purposes. The first is that each task is assigned a unique identifier. Secondly, because of the linearly increasing values, an implicit time-based ordering of the tasks is provided. Notice that a \texttt{std::mutex} is used to protect the assignment and update of the \texttt{currentId}; this ensures the code is thread-safe, meaning that mutliple threads can safely create instances of this class and expect that unique ids are generated.
+
+Even though the \texttt{ConcurrentDAG} class is written as a template type, for the purposes of this book, the type is only ever expected to be a \texttt{std::shared\_pointer<Task>}. Specifically the \texttt{ConcurrentDAG} expects the template type \texttt{T} to have a \texttt{getId()} method. This method is expected to return a unique identifier for each instance stored in the data structure.
+
+\subsubsection{Data Members}
+
+Several pieces of data have to be tracked in order to construct the DAG functionality. The declaration for these data members is found in \FigureCode \ref{chapter:dag:impl:data-members}. The first, \texttt{m\_nodes}, is a set of all tasks either waiting for execution or in execution but pending completion. The \texttt{m\_nodes} member is a \texttt{std::map} in order to return items in sorted (i.e. time-based) order as they are dequeued; all other \texttt{map}s are \texttt{std::unordered\_map}s for best possible performance. Next, \texttt{m\_inUse}, is the set of tasks that have been selected for execution, but have not yet completed; the tasks in this container are still references in the \texttt{m\_nodes} container. A task may have other tasks depending upon it for completion before they can execute. A container for tracking these dependencies is needed; this is sometimes known as an adjacency list. These dependencies are identified in the \texttt{m\_adjacent} container. Finally, when looking for the next task available for computation another container, \texttt{m\_reference}, is needed to help speed up the search for tasks that have no references in the \texttt{m\_adjacent} container. How these data structures are used is highlighted as the class methods are discussed later in the chapter.
+
+\begin{code}[caption={\texttt{ConcurrentDAG} Data Members}, label=chapter:dag:impl:data-members]
+std::map<uint32_t, Node> m_nodes;
+std::unordered_set<uint32_t> m_inUse;
+std::unordered_map<uint32_t, std::unordered_set<uint32_t>> m_adjacent;
+std::unordered_map<uint32_t, std::unordered_set<uint32_t>> m_reference;
+\end{code}
+
+\subsubsection{Adding Tasks}
+
+There are two contexts in which tasks are added to the DAG. The first is adding a task that has no dependencies, the second is adding a group of tasks that have dependencies within that group. Although it is easily argued that adding a single task is a subset of adding a group, in practice it turns out to be better to write code to handle these cases independently. Another important consideration is that adding a group of tasks with dependencies must be handled as an atomic operation; no other tasks can be added or removed while the group is added. 
+
+Because of the need to ensure all tasks in a group are added atomically, the concept of a group operation is included as part of the \texttt{ConcurrentDAG}. This is provided through two simple methods that must be used to wrap the adding of the tasks. The names of these methods are \texttt{beginGroup} and \texttt{endGroup}, their implemention is shown in \FigureCode \ref{chapter:dag:impl:group}.
+
+\begin{code}[caption={Group Operations}, label=chapter:dag:impl:group]
+void beginGroup()    { m_mutex.lock(); }
+void endGroup()      { m_mutex.unlock(); }
+\end{code}
+
+The implementation for these methods is trivial, but important. They obtain a lock on a mutex; noting all other operations on the \texttt{ConcurrentDAG} require obtaining a lock on this mutex. The type of mutex used is a \texttt{std::recursive\_mutex}. This type of mutex allows a thread that has already obtained a lock on a mutex to pass through when it tries to obtain it again. In other words, a thread can call \texttt{beginGroup}, which obtains the mutex lock, then make another call that requires the mutex lock and pass right through, while other threads are blocked on the same methods. The use of the mutex not only ensures thread safety, it also ensures the thread that obtained the lock is the only one able to add new tasks.
+
+Therefore, when adding a group of related tasks, the \texttt{beginGroup} method is called first, the tasks are added, then \texttt{endGroup} is called. Between these two calls, tasks are added through the \texttt{addEdge} method. The code for this method is shown in \FigureCode \ref{chapter:dag:impl:add-edge}. The method is named \texttt{addEdge} because it is not only adding tasks to the DAG, but is also adding an edge (a dependency) between the tasks. The \texttt{source} parameter identifies the task that must be executed before the task identified by the \texttt{dependent} parameter.
+
+\begin{code}[caption={Adding Tasks with Dependencies}, label=chapter:dag:impl:add-edge]
+void addEdge(T source, T dependent)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+  m_nodes[source->getId()] = source;
+  m_nodes[dependent->getId()] = dependent;
+
+  if (m_adjacent.find(source->getId()) == m_adjacent.end())
+  {
+    m_adjacent[source->getId()] = std::unordered_set<uint32_t>();
+  }
+  m_adjacent[source->getId()].insert(dependent->getId());
+
+  if (m_reference.find(dependent->getId()) == m_reference.end())
+  {
+    m_reference[dependent->getId()] = std::unordered_set<uint32_t>();
+  }
+  m_reference[dependent->getId()].insert(source->getId());
+}
+\end{code}
+
+The first step in the method is to grab the recursive mutex. In the case of a group operation, the thread will already own the lock from a call to \texttt{beginGroup} and pass through. Next, both the \texttt{source} and \texttt{dependent} tasks are added to the container that tracks all tasks currently in the DAG. Because \texttt{m\_nodes} is a \texttt{std::map}, if the task is already in the container it isn't duplicated, it simply overwrites itself; this is faster than searching and then adding if it doesn't exist.
+
+The next step in \texttt{addEdge} is to add the \texttt{dependent} task as an \textit{adjacent} task to the \texttt{source}. Adjacent tasks are those that depend upon the \texttt{source} to complete before they can be dequeued for use. Finally, the last step is to add the \texttt{source} task to a \texttt{m\_reference} container. This container allows for quick lookup, when dequeing the next available task, to determine if the candidate task is \textit{referenced} as a dependent to another task. By having each \texttt{dependent} task maintain a set of \texttt{source} tasks upon which it depends, it makes the search trivial, rather than having to look for the task in all other \texttt{source} tasks.
+
+Adding a single task to the DAG is trivial, as compared to adding two. The first difference is that it is not necessary to invoke the \texttt{beginGroup} and \texttt{endGroup} methods. The second, is the code for adding a single node is requires only that the node is added to the master list of tasks and setting its adjaceny list to an empty set. The code for the \texttt{addNode} method is shown in \FigureCode \ref{chapter:dag:impl:add-single}.
+
+\begin{code}[caption={Adding a Single Task}, label=chapter:dag:impl:add-single]
+void addNode(T one)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+  m_nodes[one->getId()] = one;
+  m_adjacent[one->getId()] = std::unordered_set<uint32_t>();
+}
+\end{code}
+
+\subsubsection{Dequeueing \& Removing Tasks}
+
+A task goes through a two-step dequeue and removal process before it is completely eliminated from the DAG. The first step is to dequeue the task for execution. At this point, the task is identified as \textit{in use} (i.e., being executed), but still considered part of the DAG so as to prevent dependent tasks from being dequeued for execution. The second step is the final removal of the task from the DAG upon completion. In this step the task is fully removed from the DAG, allowing dependent tasks to be dequeued.
+
+The code for dequeuing a task from the DAG is shown in \FigureCode \ref{chapter:dag:impl:dequeue}. As with all other methods, the first step in \texttt{dequeue} is to grab a lock on the mutex. Once the lock is obtained, the list of all tasks is searched for a task that is not dependent upon any other tasks or any tasks currently in use. The search of all tasks isn't a random search, it is in order by the oldest tasks. This happens by design through the use of a \texttt{std::map}, which is a binary search tree (\texttt{std::unordered\_map} is an unordered hash table). The ordering of the tasks in \texttt{m\_nodes} is based upon the \texttt{Task::m\_id} member, which is an \texttt{uint32\_t} that is assigned an increasing value based upon when it was created.
+
+\begin{code}[caption={Dequeing a Task}, label=chapter:dag:impl:dequeue]
+T dequeue()
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+  T item = nullptr;
+  bool found = false;
+  for (const auto& candidate : m_nodes)
+  {
+    auto itr = m_reference.find(candidate.first);
+    if ((itr == m_reference.end() ||
+      itr->second.size() == 0) &&
+      m_inUse.find(candidate.first) == m_inUse.end())
+    {
+      found = true;
+      item = candidate.second;
+      m_inUse.insert(candidate.first);
+      break;
+    }
+  }
+
+  return item;
+}
+\end{code}
+
+It is easy to determine if a task is dependent upon another task by checking the \texttt{m\_reference} data structure. If the task is not found in the data structure, or is found but has a size of 0, then it isn't reliant upon a task not yet dequeued. However, it may still be dependent upon an in use task. This is also easily determined by looking for a reference to it in the \texttt{m\_inUse} set. If the \texttt{candidate} task is found to not be dependent upon any other tasks, it is assigned to the local \texttt{item} variable, added to the \texttt{m\_inUse} set, \texttt{found} set to \texttt{true}, and the search loop ended. Because the \texttt{Task} information is no longer needed, only the \texttt{Task::m\_id} (stored as the key in the \texttt{candidate.first} member) is stored in the \texttt{m\_inUse} set. In the case no task is found that meets the criteria, or none exist at all, the \texttt{item} variable remains set to the \texttt{nullptr} and the method returns.
+
+When a task has completed execution, its needs to be completely removed from the DAG. The method for doing this is called \texttt{finalize} and is show in \FigureCode \ref{chapter:dag:impl:finalize}. This method first performs a quick check to see if the task being finalized actually exists in the \texttt{m\_inUse} set. This is only done as an \texttt{assert} so that program logic errors can be discovered, release builds will not have this check. Next, the code goes through all of its adjacent tasks and removes references to itself from those tasks. This removes the dependency from this task to any other task in the DAG. The code then cleans up the \texttt{m\_adjacent} set by erasing it. Finally, the task itself is removed from both the master set of tasks and the in use tasks. When this method exits, the task is no longer a part of the DAG, and any tasks previously dependent upon its completion are now free to be dequeued.
+
+\begin{code}[caption={Finalizing a Task}, label=chapter:dag:impl:finalize]
+void finalize(const T& node)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+  assert(m_inUse.find(node->getId()) != m_inUse.end());
+
+  for (auto id : m_adjacent[node->getId()])
+  {
+    m_reference[id].erase(node->getId());
+  }
+  m_adjacent.erase(node->getId());
+  m_nodes.erase(node->getId());
+  m_inUse.erase(node->getId());
+}
+\end{code}
+
+\subsection{Thread Pool}
+
+The public interface to the \texttt{ThreadPool} is changed from both the previous chapters. The changes to the interface are made to support the ability to add tasks that depend upon other tasks. The interface exposed by the \texttt{ThreadPool} matches that of the \texttt{ConcurrentDAG} as detailed in Section \ref{chapter:dag:impl:dag}. \FigureCode \ref{chapter:dag:thread-pool:declaration} shows the revised \texttt{ThreadPool} class declaration.
+
+\begin{code}[caption={\texttt{ThreadPool} Declaration}, label=chapter:dag:thread-pool:declaration]
+class ThreadPool
+{
+public:
+  static std::shared_ptr<ThreadPool> instance();
+  static void terminate();
+
+  void beginGroup()    { m_taskDAG.beginGroup(); }
+  void endGroup()      { m_taskDAG.endGroup(); }
+  void enqueueTask(std::shared_ptr<Task> source);
+  void enqueueTask(
+    std::shared_ptr<Task> source, 
+    std::shared_ptr<Task> dependent);
+
+protected:
+  ThreadPool(uint16_t sizeInitial);
+
+private:
+  static std::shared_ptr<ThreadPool> m_instance;
+  friend WorkerThread;
+
+  std::vector<std::shared_ptr<WorkerThread>> m_threadQueue;
+  ConcurrentDAG<std::shared_ptr<Task>> m_taskDAG;
+  std::condition_variable m_eventDAG;
+
+  void taskComplete();
+};
+\end{code}
+
+The application interface to the \texttt{ThreadPool} is nearly identical to the \texttt{ConcurrentDAG}, because it is essentially a pass-through wrapper around the \texttt{ConcurrentDAG}. The \texttt{beginGroup} and \texttt{endGroup} methods simply invoke the underlying \texttt{m\_taskDAG} methods. The two \texttt{enqueueTask} methods invoke the \texttt{addNode} and \texttt{addEdge} methods of the \texttt{m\_taskDAG}. Additionally, these \texttt{enqueueTask} methods signal the \texttt{m\_eventDAG} to ensure a worker thread is released so the task can potentially be dequeued from the DAG. The code for these two methods is found in \FigureCode \ref{chapter:dag:thread-pool:enqueue-task}.
+
+\begin{code}[caption={\texttt{ThreadPool::enqueueTask} Methods}, label=chapter:dag:thread-pool:enqueue-task]
+void ThreadPool::enqueueTask(std::shared_ptr<Task> source)
+{
+  m_taskDAG.addNode(source);
+  m_eventDAG.notify_one();
+}
+
+void ThreadPool::enqueueTask(
+  std::shared_ptr<Task> source, 
+  std::shared_ptr<Task> dependent)
+{
+  m_taskDAG.addEdge(source, dependent);
+  m_eventDAG.notify_one();
+}
+\end{code}
+
+The one new structural addition to the \texttt{ThreadPool} is the \texttt{taskComplete} method. The implementation of this method is found in \FigureCode \ref{chapter:dag:thread-pool:task-complete}. The purpose of this method is to allow \texttt{WorkerThread}s to inform the \texttt{ThreadPool} when a task has completed execution. On completion of a task, more than one dependent task may become available for computation. Therefore, multiple worker threads must be signaled to that any available tasks are grabbed for computation.
+
+\begin{code}[caption={\texttt{ThreadPool::taskComplete} Method}, label=chapter:dag:thread-pool:task-complete]
+void ThreadPool::taskComplete() 
+{
+  m_eventQueue.notify_all(); 
+}
+\end{code}
+
+\subsection{Worker Thread}\label{chapter:dag:impl:worker-thread}
+
+Worker threads continue to have the same fundamental purpose, as used in Chapter \ref{chapter:scalable-task-based}, watch the task queue and grab the next available task. The change this time is that the tasks come from a DAG, which may describe complex inter-relationships between the tasks, which affect the order in which they are removed.
+
+The revised constructor is shown in \FigureCode \ref{chapter:dag:worker-thread:constructor}. The constructor returns to looking much like the \texttt{WorkerThread} from Chapter \ref{chapter:scalable-task-based}. The constructor accepts parameters that provide references to the \texttt{ConcurrentDAG} which contains the tasks, along with the \texttt{std::condition\_variable} used to signal when tasks are added to the DAG. The body of the constructor creates the thread associated with the worker.
+
+\begin{code}[caption={\texttt{WorkerThread} Constructor}, label=chapter:dag:worker-thread:constructor]
+WorkerThread::WorkerThread(
+    ConcurrentDAG<std::shared_ptr<Task>>& taskDAG, 
+    std::condition_variable& taskDAGEvent) :
+  m_taskDAG(taskDAG),
+  m_eventTaskDAG(taskDAGEvent),
+  m_done(false),
+  m_thread(nullptr)
+{
+  m_thread = std::unique_ptr<std::thread>(
+    new std::thread(&WorkerThread::run, this));
+}
+\end{code}
+
+The \texttt{run} method has changed somewhat to support the way tasks are represented in the DAG. The revised method is shown in \FigureCode \ref{chapter:dag:worker-thread:run}. The only difference in this method versus the one in Chapter \ref{chapter:scalable-task-based} is the addition of two statments. The first is \texttt{m\_taskDAG.finalize(task)}. This statement tells the DAG to remove any reference of the task from the DAG. Remember that DAG-based tasks have a two-step use case: they are first dequeued, then finalized. The other additional statement is \texttt{ThreadPool::instance()->taskComplete()}. This statement informs the \texttt{ThreadPool} a task has just finished execution, causing it to signal all worker threads so that all dependent tasks possibly released are now grabbed and executed.
+
+\begin{code}[caption={\texttt{WorkerThread::run} Method}, label=chapter:dag:worker-thread:run]
+void WorkerThread::run()
+{
+  while (!m_done)
+  {
+    std::shared_ptr<Task> task = m_taskDAG.dequeue();
+    if (task != nullptr)
+    {
+      task->execute();
+      task->complete();
+      m_taskDAG.finalize(task);
+      ThreadPool::instance()->taskComplete();
+    }
+    else
+    {
+      std::unique_lock<std::mutex> lock(m_mutexEventTaskDAG);
+      m_eventTaskDAG.wait(lock);
+    }
+  }
+}
+\end{code}
+
+\section{Application Task Dependencies}\label{chapter:dag:app-demo}
+
+In addition to revising the framework to include the concept of task dependencies, the interactive Mandelbrot viewing application is also revised to utilize the ability to define task dependencies. This is done by defining a new \texttt{MandelFinishedTask} that is dependent upon the \texttt{MandelPartTask} tasks. The prime number task remains the same, as only one is ever in existence at any time. The \texttt{MandelImageTask} is now removed, with its purpose no longer necessary with the new task depencency framework in place. The other revision to the application code is that tasks are now added using the new \texttt{ThreadPool} interface.
+
+The new \texttt{MandelFinishedTask} class is shown in \FigureCode \ref{chapter:dag:app-demo:mandel-finished-task}. Interestingly, this task doesn't actually do anything, so what is its purpose? The purpose is to act as a kind of signal to the application code that a new Mandelbrot image has completed and it is okay to copy those pixels into the image currently being rendered. The way this works, is to make this task dependent upon all of the \texttt{MandelPartTasks}. When those tasks have all finished, the \texttt{MandelFinishedTask} is removed from the DAG and executed.
+
+\begin{code}[caption={\texttt{MandelFinishedTask}}, label=chapter:dag:app-demo:mandel-finished-task]
+class MandelFinishedTask : public Task
+{
+public:
+  MandelFinishedTask(std::function<void ()> onComplete) :
+    Task(onComplete)
+  {
+  }
+
+  virtual void execute() {}
+};
+\end{code}
+
+Still, the question remains, how does this signal the application, the task doesn't do anything! The answer to the question is in the revised \texttt{Mandelbrot::startNewImage} method, shown in \FigureCode \ref{chapter:dag:app-demo:start-new-image}. The first part of the method creates an instance of a \texttt{MandelFinishedTask}, and this is the key, passes a lambda to the \texttt{onComplete} parameter that copies the newly computed pixels into the image currently being rendered. In other words, while this task performs no computation itself, its \texttt{onComplete} operation is copying the newly computed data into the rendered image.
+
+\begin{code}[caption={\texttt{startNewImage} Method}, label=chapter:dag:app-demo:start-new-image]
+void Mandelbrot::startNewImage()
+{
+  auto taskFinished = std::make_shared<MandelFinishedTask>(
+    [this]()
+    {
+      copyToPixels();
+      m_inUpdate = false;
+    });
+
+  ThreadPool::instance()->beginGroup();
+
+  double deltaY = (m_mandelBottom - m_mandelTop) / m_sizeY;
+  for (auto row : IRange<decltype(m_sizeY)>(0, m_sizeY - 1))
+  {
+    auto task = std::shared_ptr<MandelPartTask>(
+      new MandelPartTask(
+        m_image.get() + row * m_sizeX, 
+        m_sizeX, MAX_ITERATIONS,
+        m_mandelTop + row * deltaY,
+        m_mandelLeft, m_mandelRight, 
+        nullptr));
+
+    ThreadPool::instance()->enqueueTask(task, taskFinished);
+  }
+
+  ThreadPool::instance()->endGroup();
+}
+\end{code}
+
+The second part of the method, beginning with the \texttt{ThreadPool::instance()->beginGroup()} statement, prepares the tasks that perform the Mandelbrot image computation. The loop goes through each row in the image and creates a \texttt{MandelPartTask} for that row. As the task is added to the \texttt{ThreadPool}, the \texttt{taskFinished} is identified as being dependent upon it. After all of the row tasks are added, a call to \texttt{endGroup} is made, telling the \texttt{ThreadPool} the current group of dependent tasks is complete. With these task dependencies set up, the scheduling framework takes over and ensures all of the \texttt{MandelPartTask}s are complete, before the \texttt{MandelFinishedTask} is executed.
+
+% consider showing profiling results from the Scalable and DAG applications that show there is no longer a thread sitting around doing nothing.
+
+\subsection{Further Demonstration}\label{chapter:dag:app-demo:non-trivial}
+
+The demonstration application provided as part of this chapter includes an additional task and application code that provides a better run-time demonstration of the use of task dependencies. A new task named \texttt{SimpleTask} is added that waits for a specified amount of time. A new function named \texttt{startChapterDemo} is added that creates a non-trivial set of task dependencies that match those found in \FigureGeneral \ref{chapter:dag:concepts:dag-figure}.
+
+The code for the new task is found in \FigureCode \ref{chapter:dag:app-demo:simple-task}. The task accepts an \texttt{uint16\_t}, used to identify the task for display. When the task is executed it goes to sleep for 3000 milliseconds, then shows its name. The only purpose of this task is to aid in demonstrating the order in which tasks are executed.
+
+\begin{code}[caption={\texttt{SimpleTask}}, label=chapter:dag:app-demo:simple-task]
+class SimpleTask : public Task
+{
+public:
+  SimpleTask(uint16_t name) :
+    Task(nullptr),
+    m_name(name)
+  {}
+
+  virtual void execute() 
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+    std::cout << m_name << std::endl;
+  }
+
+private:
+  uint16_t m_name;
+};
+\end{code}
+
+The code for the new \texttt{startChapterDemo} is found in \FigureCode \ref{chapter:dag:app-demo:chapter-demo}. This method creates a set of \texttt{SimpleTask}s that match those found in \FigureGeneral \ref{chapter:dag:app-demo:simple-task}. The first part of the method creates the tasks and identifies them by their number. Finally, the method adds the tasks to the \texttt{ThreadPool}, defining the various dependencies among the tasks. Task 2 is referenced twice in order to define the relationship between it and tasks 4 and 5. Also, tasks 4 and 6 are referenced multiple times in order to define their dependencies upon more than one parent tasks. Remember that even though a task is referenced more than once doesn't mean it is computed multiple times, the \texttt{ConcurrentDAG} ensures a task is added only once, regardless of the number of times it is referenced.
+
+\begin{code}[caption={\texttt{startChapterDemo} Method}, label=chapter:dag:app-demo:chapter-demo]
+void ScalabilityApp::startChapterDemo()
+{
+  ThreadPool::instance()->beginGroup();
+
+  auto task1 = std::make_shared<SimpleTask>(1);
+  auto task2 = std::make_shared<SimpleTask>(2);
+  auto task3 = std::make_shared<SimpleTask>(3);
+  auto task4 = std::make_shared<SimpleTask>(4);
+  auto task5 = std::make_shared<SimpleTask>(5);
+  auto task6 = std::make_shared<SimpleTask>(6);
+
+  ThreadPool::instance()->enqueueTask(task1, task4);
+  ThreadPool::instance()->enqueueTask(task2, task4);
+  ThreadPool::instance()->enqueueTask(task2, task5);
+  ThreadPool::instance()->enqueueTask(task3, task4);
+  ThreadPool::instance()->enqueueTask(task4, task6);
+  ThreadPool::instance()->enqueueTask(task5, task6);
+
+  ThreadPool::instance()->endGroup();
+}
+\end{code}
+
+When the program is run, the first three tasks, 1, 2, and 3 are executed in parallel (if enough CPU cores). Once task 2 has completed, task 5 becomes available and begins computation. When all three of tasks 1, 2, and 3 complete, task 4 is released and begins computation. Finally, when tasks 4 and 5 complete, task 6 is released and begins computation. On my computer, tasks 1, 2, and 3 all compute in parallel, when they are finished, 4 and 5 compute in parallel, and finally task 6 executes. This code shows how a non-trivial set of relationships between tasks is easily expressed in application code, and the hard work of scheduling the tasks is left to the underlying scheduling framework.
+
+\section{Summary}\label{chapter:dag:summary}
+
+This chapter introduced the concept of allowing dependencies between tasks through the use of a DAG-based scheduling framework. This provides an extremely powerful tool for an application developer through simplified application code by placing the algorithmic complexity in the scheduling framework. To achieve this, the underlying framework required a number of changes, most noteworthy of which is the introduction of a DAG-based data structure used for determing the order in which tasks can be removed for computation. Having this new capability simplified the application code, while also making better use of the thread pool framework.

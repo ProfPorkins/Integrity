@@ -1,0 +1,347 @@
+% Copyright © 2015 by James Dean Mathias
+% All Rights Reserved
+
+\chapter{Scalability - Priority}\label{chapter:scalable-priority}
+
+For some applications, not all tasks are equal, some require higher priority over others. This chapter introduces the concept of priority to the task framework, which offers a developer greater control over the ordering of application tasks. The impact on the task framework is relatively modest, and nearly trivial in the application code. The code presented in this chapter is modifed from Chapter \ref{chapter:scalable-task-based}, extended to support tasks with priority.
+
+There are a variety of approaches for a priority based system, keeping in mind there are possibly many worker threads running on a large number of CPU cores. One approach is to have all threads select the highest priority task available. This requires an aging scheme to ensure low priority tasks are not starved. Another approach is to have most worker threads select the highest priority task available, and a smaller number of worker threads that select tasks from other (lower) specified priorities. With this approach, no aging scheme is necessary, simplifying the code complexity. Furthermore, this approach allows low priority tasks to always be worked on, even in the presence of a constant stream of higher priority tasks. It also gives the application developer a finer grained control of how tasks flow through a system. The second approach is presented in this chapter and implemented in the Mandelbrot visualization application.
+
+This chapter adds priority to the fundamental scalability concepts, building upon those presented in Chapter \ref{chapter:scalable-task-based}. With this concept now introduced, Section \ref{chapter:priority:building-blocks} discusses the same building blocks presented in Chapter \ref{chapter:scalable-task-based} with respect to the changes necessary to support task priority. Finally, the Mandelbrot application is revisited and the changes necessary to support task priority are presented in Section \ref{chapter:priority:app-demo}.
+
+\section{Building Blocks}\label{chapter:priority:building-blocks}
+
+This section of the chapter walks through the implementation, highlighting the changes needed to transform the framework code from Chapter \ref{chapter:scalable-task-based} into one that supports task priority. In general, the changes are fairly modest, with the exception of a new priority queue.
+
+\subsection{Priority Queue}\label{chapter:priority:impl:priority-queue}
+
+The most interesting part of the changes introduced in this chapter is with the choice of priority queue implementation. The first-thought choice is to use the standard library \texttt{std::priority\_queue}, and place it in a lightweight synchronization wrapper, similar to what was done in the previous chapter with \texttt{ConcurrentQueue} through the use of \texttt{std:queue}. However, we have a requirement that worker threads can request tasks with priority other than the highest. Specifically, that worker threads can select from specific priorities. The \texttt{std:priority\_queue} is designed to return only the highest priority item; realistically another approach is necessary.
+
+Thankfully, there is another standard library container that meets this need, although it is not an obvious choice at first glance; the \texttt{std::multiset} container. While it is a set by definition, it allows multiple entries of items with the same key, with those items in the set of the same key removed in the order they were added. It is this feature, along with the ability to specify an item comparison operator that makes it possible to utilize the \texttt{std::multiset} for the framework priority queue.
+
+The \texttt{std::multiset} is wrapped into a new type named \texttt{ConcurrentMultiqueue} that provides lightweight synchronization along with methods to add and remove tasks. The remainder of this section details the implementation.
+
+\subsubsection{Task Comparison}
+
+Because tasks are an Abstract Data Type (ADT), the \texttt{std::multiset} needs to be given a way to compare one \texttt{Task} with another. The \texttt{std::multiset} takes as one of its template parameters a binary predicate that performs the comparison between the set items. The binary predicate must return a \texttt{bool} result of \texttt{true} if the first element should be ordered before the second. For this framework I have chosen to implement a \texttt{std::binary\_function} that compares tasks based upon their priority. The code for this function is shown in \FigureCode \ref{chapter:priority:task-compare}.
+
+\begin{code}[caption={\texttt{TaskCompare} Predicate}, label=chapter:priority:task-compare]
+class TaskCompare : public std::binary_function<
+  std::shared_ptr<Task>, 
+  std::shared_ptr<Task>, bool>
+{
+public:
+  bool operator()(
+    const std::shared_ptr<const Task>& lhs, 
+    const std::shared_ptr<const Task>& rhs) const
+  {
+    return (lhs->m_priority < rhs->m_priority);
+  }
+};
+\end{code}
+
+Remember that tasks are managed through \texttt{std::shared\_ptr}s, therefore the \texttt{std::binary\_function} types are shared pointers to tasks. The comparision operator inside the class is quite simple, it returns \texttt{true}/\texttt{false} based upon the priority of the two tasks.
+
+\subsubsection{\texttt{ConcurrentMultiqueue} Types}
+
+The \texttt{ConcurrentMultiqueue} is a template class that accepts three different template parameters. The class type declaration is show in \FigureCode \ref{chapter:priority:multiqueue:types}. 
+
+\begin{code}[caption={\texttt{ConcurrentMultiqueue} Declaration}, label=chapter:priority:multiqueue:types]
+template <typename T, typename P, typename C>
+class ConcurrentMultiqueue
+\end{code}
+
+Type \texttt{T} is the data type represented in the container. In this application \texttt{T} is a shared pointer to a task, \texttt{std::shared\_ptr<Task>}. The second type \texttt{P} is the data type used to represent priority. For this application \texttt{P} is an inner \texttt{enum} class of type \texttt{Task::Priority}. Finally, \texttt{C} is the boolean operator that provides the comparision between the types. As described in the previous section, this is a binary function named \texttt{TaskCompare}. Even though \texttt{TaskCompare} is always the operator, I decided to leave it as a template parameter in a effort to keep the ConcurrentMultiqueue class as generic as possible, even though there is one piece in the class that is tied to the implementation of the \texttt{Task} class.
+
+\subsubsection{Enqueuing Items}
+
+The code for enqueuing items into the container is fairly simple, nothing more than a simple synchronization wrapper around the \texttt{enqueue} method provided by the \texttt{std::multiset}. The code for the \texttt{enqueue} method is shown in \FigureCode \ref{chapter:priority:multiqueue:enqueue}.
+
+\begin{code}[caption={\texttt{enqueue} Implementation}, label=chapter:priority:multiqueue:enqueue]
+void enqueue(const T& item)
+{
+  std::lock_guard<std::mutex> lock(m_mutex);
+  m_queue.insert(item);
+}
+\end{code}
+
+\subsubsection{Dequeue Highest Priority}
+
+This \texttt{dequeue} method returns \texttt{true}/\texttt{false} depending upon whether or not an item is returned through the reference parameter. In other words, this method does not block if there is nothing in the queue, it will return with \texttt{false} if nothing was available when it was called. The \texttt{begin} method of the \texttt{std::multiset} returns an iterator to the highest priority item in the set. As a result, the code to dequeue the highest priority item is relatively simple, as shown in \FigureCode \ref{chapter:priority:multiqueue:dequeue-highest}.
+
+\begin{code}[caption={Dequeue Highest Priority}, label=chapter:priority:multiqueue:dequeue-highest]
+bool dequeue(T& item)
+{
+  std::lock_guard<std::mutex> lock(m_mutex);
+  bool success = false;
+
+  auto itr = m_queue.begin();
+  if (itr != m_queue.end())
+  {
+    item = *itr;
+    m_queue.erase(itr);
+    success = true;
+  }
+
+  return success;
+}
+\end{code}
+
+This method begins by locking on the mutex to ensure correct thread synchronization. Next, an iterator to the first item in the set is grabbed through the \texttt{begin} method. Because there might not be an item in the set, the iterator is checked to see if it came from an empty set or is an actual item. If an actual item was retrieved, the iterator is dereferenced and the value stored into the \texttt{item} parameter passed by reference. Once a copy of the item is made into the reference parameter, the item is removed from the container and the \texttt{success} indicator is set to \texttt{true}. A quick note about the performance of this copy. The items stored in the container are \texttt{std::shared\_ptr}s. Therefore, the copy is only that of a shared pointer, which is quite small.
+
+\subsubsection{Dequeue Selected Priority}
+
+The \texttt{ConcurrentMultiqueue} provides the ability to remove an item of a selected priority, rather than the highest priority item overall. This is provided through the overloaded \texttt{dequeue} method shown in \FigureCode \ref{chapter:priority:multiqueue:dequeue-selected}.
+
+\begin{code}[caption={Dequeue Selected Priority}, label=chapter:priority:multiqueue:dequeue-selected]
+bool dequeue(P priority, T& item)
+{
+  std::lock_guard<std::mutex> lock(m_mutex);
+  bool success = false;
+
+  auto itr = std::find_if(m_queue.begin(), m_queue.end(),
+    [priority](T value)
+    {
+      return value->getPriority() == priority;
+    });
+
+  if (itr != m_queue.end())
+  {
+    item = *itr;
+    m_queue.erase(itr);
+    success = true;
+  }
+
+  return success;
+}
+\end{code}
+
+As compared to the other \texttt{dequeue} method, the only difference is in how the item is selected. To get the next item of the specified priority the standard algorithm \texttt{std::find\_if} is used to look through the set. Even though it is a template class, the lambda used in support of the \texttt{find\_if} knows that it is working with \texttt{Task} types and uses the \texttt{getPriority} method. This keeps the \texttt{ConcurrentQueue} from being truly generic, but this isn't a problem as it is used only for this application. Once the \texttt{find\_if} algorithm returns, the remainder of the code is the same as the previously described \texttt{dequeue} method.
+
+\subsection{Task}\label{chapter:priority:impl:task}
+
+The \texttt{Task} is much the same as before, but updated to include the concept of priority. In fact, it is the \texttt{Task} class that provides the source for priority throughout the scalable framework. A priority type is added to the framework through the use of an \texttt{enum} class named \texttt{Priority}. This is shown in \FigureCode \ref{chapter:priority:task:priority}. This enumeration spells out the three different priority levels used in the framework.
+
+\begin{code}[caption={\texttt{Priority} Definition}, label=chapter:priority:task:priority]
+enum class Priority : uint8_t
+{
+  One = 1,
+  Two = 2,
+  Three = 3
+};
+\end{code}
+
+The remainder of the \texttt{Task} class declaration is shown in \FigureCode \ref{chapter:priority:task:declaration}. The constructor is modified to include a new \texttt{Priority} parameter, which is then assigned to the private \texttt{m\_priority} attribute. In addition to the new \texttt{m\_priority} attribute, a \texttt{getPriority} member is added which returns the task priority.
+
+\begin{code}[caption={\texttt{Task} Declaration}, label=chapter:priority:task:declaration]
+class Task
+{
+public:
+  Task(std::function<void ()> onComplete, Priority priority = Priority::One) :
+    m_onComplete(onComplete),
+    m_priority(priority) 
+  {
+  }
+  virtual ~Task()  {}
+
+  virtual void execute() = 0;
+  void complete()  { if (m_onComplete) { m_onComplete(); } }
+  Priority getPriority()  { return m_priority; }
+
+private:
+  Priority m_priority;
+  std::function<void ()> m_onComplete;
+};
+\end{code}
+
+\subsection{Thread Pool}
+
+The public interface to the \texttt{ThreadPool} class remains the same, however the implementation is updated to support worker threads dedicated to different levels of prioirty. Structurally the \texttt{ThreadPool} remains essentially the same. The most obvious change is the addition of notification events for when tasks of different priorities are added. \FigureCode \ref{chapter:priority:thread-pool:declaration} shows the revised \texttt{ThreadPool} class declaration.
+
+\begin{code}[caption={\texttt{ThreadPool} Declaration}, label=chapter:priority:thread-pool:declaration]
+class ThreadPool
+{
+public:
+  static std::shared_ptr<ThreadPool> instance();
+  static void terminate();
+
+  void enqueueTask(std::shared_ptr<Task> task);
+
+protected:
+  ThreadPool(uint16_t sizeInitial);
+
+private:
+  static std::shared_ptr<ThreadPool> m_instance;
+
+  std::vector<std::shared_ptr<WorkerThread>> m_threadQueue;
+
+  ConcurrentMultiqueue<
+    std::shared_ptr<Task>, 
+    Task::Priority, 
+    TaskCompare> m_taskQueue;
+
+  std::condition_variable m_eventPriorityOne;
+  std::condition_variable m_eventPriorityTwo;
+  std::condition_variable m_eventPriorityThree;
+};
+\end{code}
+
+The container for the tasks is changed to utilize the \texttt{ConcurrentMultiqueue}, which handles the prioritization of the tasks. The next change is to have individual \texttt{std::condition\_variable} variables for each of the priority levels. These are used to signal worker threads when tasks of the corresponding priority are added.
+
+As noted at the start of this chapter, the approach taken in this book is to allow for the possibility of worker threads dedicated to working on lower priority tasks concurrently with worker threads working on the highest available priority tasks. The ability to do this is as simple as creating a \texttt{WorkerThread} and passing in the highest priority level of tasks it can accept. Revisions to the \texttt{WorkerThread} are discussed in the Section \ref{chapter:priority:impl:worker-thread}. Creating the different worker threads is demonstrated in the \texttt{ThreadPool} constructor, shown in \FigureCode \ref{chapter:priority:thread-pool:constructor}.
+
+\begin{code}[caption={\texttt{ThreadPool} Constructor}, label=chapter:priority:thread-pool:constructor]
+ThreadPool::ThreadPool(uint16_t sizeInitial)
+{
+  // Creating worker threads that take tasks of the highest available priority.
+  for (auto thread : IRange<uint16_t>(1, sizeInitial + 4))
+  {
+    auto worker = std::make_shared<WorkerThread>(
+      Task::Priority::One, 
+      m_taskQueue, 
+      m_eventPriorityOne);
+    m_threadQueue.push_back(worker);
+  }
+  // Create a worker thread that takes only tasks of Priority::Three.
+  auto worker =std::make_shared<WorkerThread>(
+    Task::Priority::Three, 
+    m_taskQueue, 
+    m_eventPriorityThree);
+  m_threadQueue.push_back(worker);
+}
+\end{code}
+
+The \texttt{enqueueTask} is updated to signal one or more condition variables, depending upon the priority of the task added. The code for the revised method is shown in \FigureCode \ref{chapter:priority:thread-pool:enqueue}. As with Chapter \ref{chapter:scalable-task-based}, the task is added to the queue, which in this case is now a prioirty queue. Following this, the priority of the task is checked and one or more of the condition variables is signaled.
+
+\begin{code}[caption={Enqueuing a Task}, label=chapter:priority:thread-pool:enqueue]
+void ThreadPool::enqueueTask(std::shared_ptr<Task> task)
+{
+  m_taskQueue.enqueue(task);
+  switch (task->getPriority())
+  {
+    case Task::Priority::Three:
+      m_eventPriorityThree.notify_one();
+    case Task::Priority::Two:
+      m_eventPriorityTwo.notify_one();
+    case Task::Priority::One:
+      m_eventPriorityOne.notify_one();
+  }
+}
+\end{code}
+
+The code works by allowing the case statement to fall though from the lowest priority to the highest. This ensures all worker threads checking tasks of higher priority are signaled of a low priority task in the event they aren't already busy. If a task of \texttt{Priority::One} is added, only the \texttt{m\_eventPriorityOne} \texttt{condition\_variable} is signaled. If a task of \texttt{Priority::Three} is added, one of each working thread priority levels is signaled.
+
+\subsection{Worker Thread}\label{chapter:priority:impl:worker-thread}
+
+Worker threads have the same fundamental purpose, as used in Chapter \ref{chapter:scalable-task-based}, watch the task queue and grab the next available task. Now, however, the tasks come from a priority queue rather than a first in, first out queue. The primary change to the \texttt{WorkerThread} is to now search for tasks based upon a highest level of priority assigned through its constructor. The revised constructor is shown in \FigureCode \ref{chapter:priority:worker-thread:constructor}.
+
+\begin{code}[caption={\texttt{WorkerThread} Constructor}, label=chapter:priority:worker-thread:constructor]
+WorkerThread::WorkerThread(
+    Task::Priority priority, 
+    ConcurrentMultiqueue<
+      std::shared_ptr<Task>, 
+      Task::Priority, 
+      TaskCompare>& taskQueue, 
+    std::condition_variable& taskQueueEvent) :
+  m_priority(priority),
+  m_taskQueue(taskQueue),
+  m_eventTaskQueue(taskQueueEvent),
+  m_done(false),
+  m_thread(nullptr)
+{
+  m_thread = std::unique_ptr<std::thread>(
+    new std::thread(&WorkerThread::run, this));
+}
+\end{code}
+
+The \texttt{run} method has changed quite a bit in order to handle the new priority concept. The revised method is shown in \FigureCode \ref{chapter:priority:worker-thread:run}. This method works by staying inside of an inner loop checking to see if it can get a task of any priority level, starting with the highest priority to which it has been assigned. When no more tasks are available, it goes into an efficient waiting state, waiting on the \texttt{condition\_variable} associated with its priority to be signaled.
+
+\begin{code}[caption={\texttt{WorkerThread::run} Method}, label=chapter:priority:worker-thread:run]
+void WorkerThread::run()
+{
+  while (!m_done)
+  {
+    Task::Priority current = m_priority;
+    bool donePriority = false;
+    while (!m_done && !donePriority)
+    {
+      bool executed = false;
+      std::shared_ptr<Task> task;
+      if (m_taskQueue.dequeue(current, task))
+      {
+        task->execute();
+        task->complete();
+        executed = true;
+      }
+      donePriority = updatePriority(executed, current);
+    }
+    if (!m_done)
+    {
+      std::unique_lock<std::mutex> lock(m_mutexEventTaskQueue);
+      m_eventTaskQueue.wait(lock);
+    }
+  }
+}
+\end{code}
+
+A closer look at the inner loop of the \texttt{run} method is warranted. Before entering the loop, the \texttt{current} variable is set to the highest priority type of tasks it should execute. Upon entering the loop, an attempt is made to retrieve a task of \texttt{current} priority. If one is found, it is executed. If one is not found, the \texttt{updatePriority} method is called, which updates \texttt{current} to the next lowest priority, and the top of the loop is started again. If a task has not previously executed and the priority can not be lowered further, \texttt{updatePriority} returns \texttt{false} and the inner loop ends. In simple terms, the inner loop grabs the next availabe task with the highest remaining priority the worker thread is assigned.
+
+It is also worth taking a look at the \texttt{updatePriority} method, shown in \FigureCode \ref{chapter:priority:worker-thread:updatePriority}. The simple purpose of this method is to update the priority of tasks the worker should execute. The first test in the method is to check if the worker had immediately executed a task. If it had, the current priority is restored (if it had been changed) to the highest priority for the worker. If no task had immediately been executed, the priority is lowered and \texttt{true} is returned. If no lower priority is possible, \texttt{false} is returned, which will end up causing the inner loop of the \texttt{run} method to terminate and return the worker to an efficient waiting state.
+
+\begin{code}[caption={\texttt{WorkerThread::updatePriority} Method}, label=chapter:priority:worker-thread:updatePriority]
+bool WorkerThread::updatePriority(
+  bool executed, 
+  Task::Priority& currentPriority)
+{
+  bool donePriority = false;
+  if (!executed)
+  {
+    switch (currentPriority)
+    {
+      case Task::Priority::One:
+        currentPriority = Task::Priority::Two;
+        break;
+      case Task::Priority::Two:
+        currentPriority = Task::Priority::Three;
+        break;
+      default:
+        donePriority = true;
+        break;
+    }
+  }
+  else
+  {
+    currentPriority = m_priority;
+  }
+  return donePriority;
+}
+\end{code}
+
+\section{Application Priority}\label{chapter:priority:app-demo}
+
+In addition to revising the scalability framework to include the concept of task priority, the interactive Mandelbrot viewing application is also revised to support task priority. This is done by having the tasks associated with computing the next Mandelbrot image set to the highest priority, and the task associated with computing the next prime number set to the lowest.
+
+The changes to the application are trivial, only the addition of a single new parameter to the task constructors, that of priority. The code for the revised \texttt{NextPrimeTask} is shown in \FigureCode \ref{chapter:priority:app-demo:nextprimetask:constructor}. The \texttt{priority} parameter is added to the end of the list, and also passed into the base \texttt{Task} class along with the \texttt{onComplete} function. The \texttt{MandelImageTask} and \texttt{MandelPartTask} are changed similarly.
+
+\begin{code}[caption={\texttt{NextPrimeTask} Constructor}, label=chapter:priority:app-demo:nextprimetask:constructor]
+NextPrimeTask::NextPrimeTask(
+    uint32_t lastPrime, 
+    uint32_t& nextPrime, 
+    std::function<void ()> onComplete,
+    Priority priority) :
+  Task(onComplete, priority),
+  m_lastPrime(lastPrime),
+  m_nextPrime(nextPrime)
+{
+}
+\end{code}
+
+The application runs as before, however, as the computational load increases, the \texttt{MandelPartTask} tasks take priority over the \texttt{NextPrimeTask} tasks, causing the next prime number generation to slow down. As a side note, prime numbers continue to be computed even at full or near full CPU load. The reason this happens is that the application has a small bit of time between the completion of one Mandelbrot image and the next as the new image pixels are copied over. During this time worker threads are available, which can work on \texttt{NextPrimeTasks}.
+
+The way the \texttt{ThreadPool} is initialized in this demonstration results in many \texttt{Priority::One} worker threads and one \texttt{Priority::Three} worker thread. This means that \texttt{Priority::Three} threads can be worked on, even while there are \texttt{Priority::One} tasks available. For some applications, this may not be desirable. For those applications, only create worker threads with \texttt{Priority::One} as their starting priority.
+
+The Mandelbrot viewer application can be modified by removing the \texttt{Priority::Three} worker. Upon doing so, the application will no longer consume any resources working on \texttt{NextPrimeTask} tasks while a Mandelbrot image is being computed. Prime numbers will still be computed, but never while any Mandelbrot image computation tasks are available.
+
+\section{Summary}\label{chapter:priority:summary}
+
+This chapter introduced the concept of tasks having different priorities. This enables the developer to have a greater degree of control over an application with respect to the ordering of tasks with respect to each other through priority. This capability was primarily achieved by replacing the simple first in, first out queue from Chapter \ref{chapter:scalable-task-based} with a new priority-based queue. Additionally, the thread pool was revised to utilize the new priority concept added to the tasks, ensuring that worker threads are given tasks appropriate for the level of priority they are assigned.

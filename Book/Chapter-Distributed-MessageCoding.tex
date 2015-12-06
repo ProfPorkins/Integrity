@@ -1,0 +1,276 @@
+% Copyright © 2015 by James Dean Mathias
+% All Rights Reserved
+
+\chapter{Message Coding}\label{chapter:coding}
+
+All distributed systems utilize an encoding or serialization scheme as part of passing messages between different processes throughout the system. The encoding scheme used in the remainder of this book is presented in this chapter. This topic is presented as a separate chapter in order to keep the focus on the distributed framework in Chapter \ref{chapter:dist}.
+
+Several considerations are important when deciding how to perform serialization. The first is performance. By performance we mean both the computational time to serialize/deserialize and the resultant size of the serialized object. A second is how difficult the scheme is to use, incorporate, and maintain. This book is focused on computational performance, therefore, that dominates the decision making. The distributed and fault-tolerant applications make use of the Boost libraries for networking, therefore, it is natural to look to the Boost serialization library. The Boost scheme is designed for general serialization, whether to a file or over a network stream. Because of this, the computational performance and size of the resultant serialization object is larger than is possible with an approach specifically focused on network transmission, not to mention the complexity involved to use. The final decision for the code presented in this book is to create a fairly simple, and highly performant solution for the distributed and fault-tolerant frameworks.
+
+\section{Message Encoding/Decoding}
+
+The approach used in this book is a basic byte-by-byte encoding/decoding of data types. Values are decomposed into their individual bytes and added to a \texttt{std::vector}. When sending and receiving of data, the vector is easily wrapped by a Boost.Asio buffer. To facilitate the message coding, a base \texttt{Message} class from which all system messages are derived, provides the core message encoding and decoding support. This class provides a set of overloaded encode and decode methods which handle the primitive types used by the applications presented in this book. The section of the \texttt{Message} class declaration relevant to the encoding/decoding methods is shown in \FigureCode \ref{chapter:coding:partial-declaration}.
+
+\begin{code}[caption={Partial \texttt{Message} Declaration}, label=chapter:coding:partial-declaration]
+class Message : public std::enable_shared_from_this<Message>
+{
+protected:
+  virtual void encodeMessage() = 0;
+  virtual void decodeMessage() = 0;
+
+  void encode(uint8_t value);
+  void encode(uint16_t value);
+  void encode(uint32_t value);
+  void encode(double value);
+
+  void decode(uint8_t& value);
+  void decode(uint16_t& value);
+  void decode(uint32_t& value);
+  void decode(double& value);
+
+private:
+  std::vector<uint8_t> m_data;
+  uint16_t m_decodePosition;
+};
+\end{code}
+
+The various \texttt{encode} and \texttt{decode} methods provide the byte encoding and decoding capabilities used by derived classes. The \texttt{m\_data} member is used to store the encoded bytes, both for sending and receiving. An \texttt{std::vector<uint8\_t>} is directly supported by Boost.Asio as a buffer from which it can send and into which it can receive. The \texttt{m\_decodePosition} is used in support of message decoding, to remember the next byte to decode. Finally, the pure virtual \texttt{encodeMessage} and \texttt{decodeMessage} methods are defined for derived classes, with the expectation that their implementations perform the data encoding and decoding. A demonstration of these methods is shown in Section \ref{chapter:coding:example}.
+
+The reason for deriving from \texttt{public std::enable\_shared\_from\_this<Message>} is described in Section \ref{chapter:coding:send-receive}.
+
+\subsection{Encoding Values}
+
+\FigureCode \ref{chapter:coding:encode-int} shows the implementations of the \texttt{encode} methods for \texttt{uint8\_t} and \texttt{uint16\_t} types. For the \texttt{uint8\_t} type, the value is simply added to the \texttt{m\_data} member. However, for \texttt{uint16\_t} type a little more work in involved. The first step is to convert the value from the host platform representation to the network representation for network transmission. This is performed through the \texttt{htons} function call. With that done, a byte-by-byte encoding of the value is done, adding each of the two bytes to the \texttt{m\_data} member. While not shown in the example code, this same thing is done for the four bytes of the \texttt{uint32\_t} type.
+
+\begin{code}[caption={Encoding Integers}, label=chapter:coding:encode-int]
+void Message::encode(uint8_t value)
+{
+  m_data.push_back(value);
+}
+
+void Message::encode(uint16_t value)
+{
+  uint16_t network = htons(value);
+  uint8_t* bytes = reinterpret_cast<uint8_t*>(&network);
+  m_data.push_back(bytes[0]);
+  m_data.push_back(bytes[1]);
+}
+\end{code}
+
+Floating point data types can suffer from endian issues \footnote{http://en.wikipedia.org/wiki/Endianness\#Floating-point\_and\_endianness}, although somewhat rare. In spite of this there is no equivalent host to netowrk float function or network to host float. It is the responsibility of the developer to know if floating point types are going to be transmitted between platforms that represent them differently. For the purposes of this book I don't take any special considerations for different floating point representation. The code shown in \FigureCode \ref{chapter:coding:encode-double} shows the \texttt{encode} method for the \texttt{double} data type. A \texttt{double} is eight bytes in size, therefore, all eight bytes are added to the \texttt{m\_data} member.
+
+\begin{code}[caption={Encoding Doubles}, label=chapter:coding:encode-double]
+void Message::encode(double value)
+{
+  uint8_t* bytes = reinterpret_cast<uint8_t*>(&value);
+  m_data.push_back(bytes[0]);
+  m_data.push_back(bytes[1]);
+  m_data.push_back(bytes[2]);
+  m_data.push_back(bytes[3]);
+  m_data.push_back(bytes[4]);
+  m_data.push_back(bytes[5]);
+  m_data.push_back(bytes[6]);
+  m_data.push_back(bytes[7]);
+}
+\end{code}
+
+\subsection{Decoding Values}
+
+The data for a message is received directly into the \texttt{m\_data} vector. After receipt of the data, the bytes in this vector need to be recomposed (decoded) into the values of the receiving class. \FigureCode \ref{chapter:coding:decode-int} shows the implementations of the \texttt{decode} methods for \texttt{uint8\_t} and \texttt{uint16\_t} types. These methods perform the reverse operation of the encode methods. They take the bytes stored in the \texttt{m\_data} vector and assign their values to the \texttt{value} parameters.
+
+\begin{code}[caption={Decoding Integers}, label=chapter:coding:decode-int]
+void Message::decode(uint8_t& value)
+{
+  value = m_data[m_decodePosition++];
+}
+
+void Message::decode(uint16_t& value)
+{
+  uint8_t* bytes = reinterpret_cast<uint8_t*>(&value);
+  bytes[0] = m_data[m_decodePosition++];
+  bytes[1] = m_data[m_decodePosition++];
+
+  value = ntohs(value);
+}
+\end{code}
+
+\section{Example Message}\label{chapter:coding:example}
+
+This section walks through a simplified version of the \texttt{MandelMessage} class from the distributed demonstration application detailed in Chapter \ref{chapter:dist}. This class shows how the base methods provided by the \texttt{Message} class are used to encode members before sending and to decode data into members following receipt of the data.
+
+\FigureCode \ref{chapter:coding:mandel-decl} shows the declaration of the \texttt{MandelMessage} class. The purpose of this class is to send the information regarding a section of the Mandelbrot image to compute to a distributed worker thread. This information contains which rows to compute, the range of the complex numerical plane those rows represent and how many iterations to attempt.
+
+\begin{code}[caption={Simplified \texttt{MandelMessage} Declaration}, label=chapter:coding:mandel-decl]
+class MandelMessage : public Message
+{
+public:
+  MandelMessage(/* -- parameters go here -- */) :
+    Message(Messages::Type::MandelMessage),
+    m_startRow(startRow),
+    m_endRow(endRow),
+    m_startX(startX),
+    m_startY(startY),
+    m_sizeX(sizeX),
+    m_deltaX(deltaX),
+    m_deltaY(deltaY),
+    m_maxIterations(maxIterations)
+  {
+  }
+
+  MandelMessage() {}
+
+protected:
+  virtual void encodeMessage();
+  virtual void decodeMessage();
+
+private:
+  uint16_t m_startRow;
+  uint16_t m_endRow;
+  uint16_t m_sizeX;
+  double m_startX;
+  double m_startY;
+  double m_deltaX;
+  double m_deltaY;
+  uint16_t m_maxIterations;
+};
+\end{code}
+
+The \texttt{MandelMessage} class has two constructors. The first is used when the class is being created for sending the message. The main thing done by this constructor is to assign the constructor parameters to the class members. Notice this constructor passes the type (\texttt{Messages::Type::MandelMessage}) of the class into the base \texttt{Message} constructor. Where this value comes from is described in the next chapter with the revised Mandelbrot application code. This type gets sent as part of the message to allow the receiver to identify which message was received and therefore, which class to create to complete the decoding. The second constructor's purpose is to allow the class to be created for when the message is being received. Because nothing is known about its members in advance of receipt, a default constructor suffices.
+
+Before a message is sent, the base \texttt{Message} class makes a call to the virtual \texttt{encodeMessage} method. The purpose of this method is to take the derived class members and encode them in advance of sending. \FigureCode \ref{chapter:coding:mandel-encode} shows the implementation for the simplified \texttt{MandelMessage} class. This method simply goes through each of the class members and calls one of the overloaded \texttt{encode} methods.
+
+\begin{code}[caption={\texttt{MandelMessage} Encoding}, label=chapter:coding:mandel-encode]
+void MandelMessage::encodeMessage()
+{
+  this->encode(m_startRow);
+  this->encode(m_endRow);
+  this->encode(m_sizeX);
+  this->encode(m_startX);
+  this->encode(m_startY);
+  this->encode(m_deltaX);
+  this->encode(m_deltaY);
+  this->encode(m_maxIterations);
+}
+\end{code}
+
+Once a message has been received, the bytes received over the network must be recomposed into the members of the derived class. The bytes need to be decoded in the exact order in which they were encoded. This is done by simply calling the overloaded \texttt{decode} methods in the same order as they were encoded. \FigureCode \ref{chapter:coding:mandel-decode} shows the \texttt{decodeMessage} for the simplified \texttt{MandelMessage} class.
+
+\begin{code}[caption={\texttt{MandelMessage} Decoding}, label=chapter:coding:mandel-decode]
+void MandelMessage::decodeMessage()
+{
+  this->decode(m_startRow);
+  this->decode(m_endRow);
+  this->decode(m_sizeX);
+  this->decode(m_startX);
+  this->decode(m_startY);
+  this->decode(m_deltaX);
+  this->decode(m_deltaY);
+  this->decode(m_maxIterations);
+}
+\end{code}
+
+This is an example of a fairly simple message with only primitive data types. A message may contain any data, it only needs to be decoded into bytes for sending and receiving. The base \texttt{Message} class can be extended to support other standard types, such as \texttt{std::string}, which then become available for use by other message classes.
+
+\section{Network Communication}\label{chapter:coding:send-receive}
+
+In addition to providing core message data encoding and decoding capabilities, it also provides the methods used to send and receive the messages. Furthermore, as will be seen shortly, it is in the send and receive methods where the message encoding and decoding is requested. Apart from a single byte recevied in each of the client and server applications, all network communication takes place by the \texttt{Message} class. The class provides two different send and one read method. The difference between the two send methods is that one is blocking, while the other is non-blocking. The read method is blocking. The code for these methods is detailed in the remainder of this section.
+
+\subsection{Sending Messages}
+
+In order to develop a fully scalable application, pending I/O must not prevent the CPU from performing useful work. At the same time, a scalable and distributed application will be computing tasks on many CPU cores spread over many different computers. This work requires messages being passed back and forth, some sending work, some sending results, all being generated at undetermined times by many different CPU cores and systems. However, there is only (usually) a single network card on each computer. This piece of hardware can only send data over one stream at a time. The OS \texttt{socket} library and the Boost.Asio framework hides some of this complexity by allowing multiple sockets to be open and written to by a multi-threaded application. However, remember from the networking discussion in Chapter \ref{chapter:networking}, it isn't valid to interleave writes to a single socket. The way to synchronize multiple threads writing to the same socket is to use Boost Strands. That is the purpose of the send method shown in \FigureCode \ref{chapter:coding:send:non-blocking}.
+
+\begin{code}[caption={Non-Blocking Send}, label=chapter:coding:send:non-blocking]
+void Message::send(
+  std::shared_ptr<ip::tcp::socket> socket, 
+  boost::asio::strand& strand)
+{
+  auto captureThis = shared_from_this();
+  strand.post(
+    [captureThis, socket]()
+    {
+      captureThis->send(socket);
+    });
+}
+\end{code}
+
+The code calling this method provides both the socket over which the message is to be sent, along with the strand on which to schedule the execution. The core of this function is simply to post a lambda to the supplied strand. Immediately upon posting the lambda, the method returns, before the send has taken place; this is why it is considered non-blocking. When the lambda is eventually executed, it makes a call to the blocking send method. It is valid for the lambda to make a blocking call because it is executing in the context of a thread running on the application's \texttt{io\_service}.
+
+The first statement of this method deserves a little explanation. Referring back to \FigureCode \ref{chapter:coding:partial-declaration} we see the class is derived from \texttt{public std::enable\_shared\_from\_this<Message>}. Deriving from this template class allows the use of the \texttt{shared\_from\_this()} function call, which returns a \texttt{std::shared\_ptr} to the current \texttt{this} class instance.
+
+The reason the shared pointer to the (derived) \texttt{Message} instance is necessary is to ensure the lifetime of the \texttt{Message} matches that of the lambda posted to the strand. If the lamba had been written with \texttt{this->send(socket);}, when the lambda is finally executed, the \texttt{this} pointer is no longer valid, resulting in an application failure. Instead, a shared pointer is created and captured by value in the lambda. When the lambda is executed, we are guaranteed to have a valid pointer to the original \texttt{this}, in addition to ensuring the lifetime of the \texttt{Message} instance lives for at least as long as the lambda. Note: In order for the pointer returned from the call to \texttt{shared\_from\_this()} to keep the class instance alive by passing the \texttt{shared\_ptr} by copy into the lambda, the instance must have been dynamically allocated from the heap, and not created on the stack. Yes, this \textbf{is} tricky stuff!
+
+The method that does the real work of encoding and sending the message data is shown in \FigureCode \ref{chapter:coding:send:blocking}. As a quick bit of error handling, the first thing the method does is to check if the socket is even open. Following this, the data for the message is encoded, using all of the technqiues discussed previously. With the message encoded, the free \texttt{boost::asio::write} function is used to send the data. The reason for choosing this function is that it blocks until all data is sent, whereas \texttt{socket::send} may return without having sent all data.
+
+\begin{code}[caption={Non-Blocking Send}, label=chapter:coding:send:blocking]
+void Message::send(std::shared_ptr<ip::tcp::socket> socket)
+{
+  if (socket->is_open())
+  {
+    this->encodeMessage();
+    boost::asio::write(*socket, boost::asio::buffer(m_type));
+
+    std::array<uint16_t, 1> size;
+    size[0] = htons(static_cast<uint16_t>(m_data.size()));
+    boost::asio::write(*socket, boost::asio::buffer(size));
+
+    if (m_data.size() > 0)
+    {
+      boost::asio::write(*socket, boost::asio::buffer(m_data));
+    }
+  }
+}
+\end{code}
+
+The first write call sends a single byte that indicates which type of message is being sent. For sending messages, this type is specified by the derived message class, being passed as a parameter into the \texttt{Message} class constructor. The types are defined by an enumeration class found in the file \texttt{MessageTypes.hpp}; this class is shown in \FigureCode \ref{chapter:coding:message-types}. The next two bytes sent are the size of the message. Finally, the encoded data is sent in the third write call.
+
+Notice the \texttt{htons} call is only made on the size of the data for the message. This is not needed for the message type, beause it is only a single byte, there is no difference in representation on different CPUs for single bytes. Because the size of the message is two bytes, it is necessary to convert to the network representation before sending. Finally, the data stored in \texttt{m\_data} has already gone through any necessary \texttt{hton} calls.
+
+\begin{code}[caption={Message Type Enumeration}, label=chapter:coding:message-types]
+namespace Messages
+{
+  enum class Type : uint8_t
+  {
+    Undefined,
+    TaskRequest,
+    MandelMessage,
+    MandelResult,
+    NextPrimeMessage,
+    NextPrimeResult,
+    TerminateCommand
+  };
+}
+\end{code}
+
+\subsection{Receiving Messages}
+
+Receiving a message is a little different from sending messages. When sending a message, the code starts with a specific derived \texttt{Message} class instance. When receiving data, it isn't possible to know which class instance to make in advance, because any message may arrive at any particular time. Therefore, a two-step process is necessary. The first step is to receive a single byte that identifies the message type (\texttt{Messages::Type} from \FigureCode \ref{chapter:coding:message-types}), then based upon this value, the correct derived \texttt{Message} class is instantiated and used to read the remainder of the bytes and decode it into the instance members.
+
+Reading of the first byte and creation of the correct derived \texttt{Message} class instance is discussed in detail in the Chapter \ref{chapter:dist}, where the first distributed application is detailed. For this chapter it is enough to know that the first byte is read, examined, and the correct class instance is created.
+
+Once the correct derived \texttt{Message} class is instantiated, the \texttt{Message::read} method is called to read the remainder of the data and decode it into the instance members. The code for this method is found in \FigureCode \ref{chapter:coding:read}.
+
+\begin{code}[caption={Message Read \& Decode}, label=chapter:coding:read]
+void Message::read(std::shared_ptr<ip::tcp::socket> socket)
+{
+  if (socket->is_open())
+  {
+    std::array<uint16_t, 1> size;
+    boost::asio::read(*socket, boost::asio::buffer(size));
+    size[0] = ntohs(size[0]);
+    m_data.resize(size[0]);
+    if (size[0] > 0)
+    {
+      boost::asio::read(*socket, boost::asio::buffer(m_data));
+      this->decodeMessage();
+    }
+  }
+}
+\end{code}
+
+The same as the \texttt{send} method, the first part of the function validates the socket is open, only if the socket is open does the code continue. Next, the size of the message is read, then based upon the size of the rest of the data, a buffer is resized and the remainder of the data is read from the socket. With all of the data read, the \texttt{decodeMessage} method is called, where the custom code for the class instance is called, which results in the data being decoded into the instance members. Notice also, that \texttt{ntohs} is called after receiving the size and before it is used. This matches the call to \texttt{htons} when sending the message.
+
+\section{Summary}
+
+This chapter has shown the approach through which messages are represented, coded, sent, received, and decoded. The code is fairly straightforward and easy to understand. However, there is some hidden complexity because this code runs in the context of the application defined task \texttt{ThreadPool} and the pool of threads running on the application \texttt{io\_service} instance. Chapter \ref{chapter:dist} provides the full context in which this messaging scheme is utilized, along with the different messages used to send work and results and how the client and server applications are setup to send and receive the messages.
+
+With the background details out of the way, it is now time to turn attention to the core subjects of this book!

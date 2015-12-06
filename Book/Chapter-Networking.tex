@@ -1,0 +1,595 @@
+% Copyright © 2015 by James Dean Mathias
+% All Rights Reserved
+
+\chapter{Networking Techniques}\label{chapter:networking}
+
+This chapter discusses the networking techniques used for the distributed applications presented in the next chapters. The foundation for the network communication comes from the Boost (\href{http://www.boost.org}{http://www.boost.org}) libraries, introduced in Section \ref{chapter:networking:boost:introduction}. The Boost libraries are used in combination with the new C++11 threading and lambda features to form clean solutions for the networking code.
+
+The choice to use Boost is driven by its cross-platform approach, the well designed interfaces, along with its developer friendly license. A testament to its design and utility is the large number of libraries that have made it into the C++11, and C++14, standards. In particular, the networking API (Boost.Asio) is well designed, easy to use, and works well across a number of different compiler and OS platforms.
+
+The networking techniques presented in this chapter and used by the demonstration applications detailed in this book have worked well for my research and work. This chapter is not a comprehensive discussion of Boost.Asio, only those techniques directly applied throughout the rest of the book are discussed. There are any number of designs and philisophies that may be taken, owing to the needs of the application being developed and to personal preferences. Consider the networking technique used in this book as a recommendation, but not necessarily one that fits the needs for every application and developer.
+
+\section{Boost Introduction}\label{chapter:networking:boost:introduction}
+
+Boost is a set of cross-platform C++ libraries that provide a broad range of capabilties. In fact, many of these capabilities have found their way into C++11 language and standard libraries, including smart pointers, threading, and lambda functions. Of primary interest for this book is the low-level networking API Boost.Asio, or simply Asio. Goals for the Boost.Asio library include \textit{Portability}, \textit{Scalability}, \textit{Efficiency}, and \textit{Ease of use}. Boost.Asio provides an asynchronous I/O abstraction for things like serial ports, file descriptors, and networking. The focus in this chapter, and the book, is on its use for networking.
+
+The Boost set of libaries is friendly for use by both commercial and non-commercial organizations, provided for by its own license, the Boost Software License\footnote{http://www.boost.org/LICENSE\_1\_0.txt}. The license is BSD like, certified \textit{Open Source} by the Open Source Initiative, comes \textit{as is}, allows for the use and modification of the Boost libraries, does not require the license is distributed with binary or executable uses of the libraries, along with not requiring the source is made available external to the organization.
+
+The Boost libaries are updated several times a year to include new capabilities, improve efficiency, and resolve outstanding bugs; at the time of this writing the current version is 1.57. A large number of the commonly used libraries are mature and stable, and care is taken to maintain backwards compatibility. Additionally, the library is verified against a large number of C++ compilers and operating system platforms. This gives developers confidence their code won't break with each new library update.
+
+\section{Boost Asio}\label{chapter:networking:asio}
+
+Boost.Asio is the library upon which networking I/O operations are built. It supports both synchronous and asynchronous operations in single and multi threaded applications. In addition to networking operations, other capabilities are exposed, such as timers, signal handling, and even SSL operations. The focus in this chapter, and the book, is on the networking operations.
+
+The Boost.Asio library provides a model of its own that must be understood to take full advantage of its capabilities; it is not simply a thin wrapper around the \textit{sockets} API. This chapter provides a solid introduction to the library and the way in which I have found to work well for my application development style, but it is strongly recommended to refer to the Boost.Asio online documentation\footnote{http://www.boost.org/doc/libs/1\_57\_0/doc/html/boost\_asio.html} for a complete description of its design, rationale, and use.
+
+\subsection{Asio io\_service}\label{chapter:networking:asio:ioservice}
+
+The foundation for Boost.Asio operations is the \texttt{io\_service}. Understanding its role and operation is essential for developing correct and efficient networking applications. Every application must instantiate an \texttt{io\_service} through which all operations are managed. The \texttt{io\_service} maintains a queue of operations that it needs to service. The operations on this queue are only serviced by the thread (or threads) that call its \texttt{.run} method. The \texttt{.run} method blocks until all these operations have completed. Using the C++11 lambda and threading features, it is trivial to create a worker thread that is dedicated to the \texttt{io\_service} queue, leaving the main application thread free to work on other tasks. The code in \FigureCode \ref{chapter:networking:ioservice-thread} illustrates how this may be done.
+
+\begin{code}[caption={io\_service Thread}, label=chapter:networking:ioservice-thread]
+boost::asio::io_service ioService;
+std::thread ioThread = std::thread(
+  [&ioService]()
+  {
+    ioService.run();
+  });
+\end{code}
+
+The first statement instantiates the \texttt{io\_service}, causing it to come to life. The next statment invokes a thread, using a lambda to define the thread function, and calls the \texttt{.run} method of the \texttt{io\_service}. This code will correctly create an \texttt{io\_service} and create a thread to service any queued operations. Note that the \texttt{.run} method will fall through (unblock) when there are no more queued operations. Therefore, this code will immediately fall through, closing down the \texttt{io\_service} thread, which is something we do not want.
+
+The solution to the above problem is to create an \texttt{io\_service::work} object which prevents the \texttt{.run} method from unblocking until the \texttt{io\_service} is stopped. The purpose of this object is to inform the \texttt{io\_service} it has work remaining to do, preventing it from falling through the \texttt{.run} method until \texttt{.stop} is called on the \texttt{io\_service}. The code in \FigureCode \ref{chapter:networking:ioservice-work} demonstrates the use of the \texttt{io\_service::work} object.
+
+\begin{code}[caption={io\_service::work Object}, label=chapter:networking:ioservice-work]
+boost::asio::io_service ioService;
+boost::asio::io_service::work work(ioService);
+
+std::thread ioThread = std::thread(
+  [&ioService]()
+  {
+    ioService.run();
+    std::cout << "Completed ioService." << std::endl;
+  });
+
+std::cout << "Sleeping for a couple of seconds..." << std::endl;
+std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+std::cout << "Stopping the ioService..." << std::endl;
+
+ioService.stop();
+ioThread.join();
+\end{code}
+
+In this code an \texttt{io\_service::work} object is created and initialized with a reference to the \texttt{ioService} instance. Inside the thread function (a lambda) the \texttt{ioService.run();} statement blocks until the \texttt{ioService.stop();} statement in the main thread is executed. A sleep operation is executed to demonstrate that the thread does not complete until the \texttt{ioService} object is told to stop. Following the \texttt{ioService.stop();} statement the \texttt{ioService} thread is joined and then the code is allowed to continue.
+
+Using this approach, a separate worker thread is created and used to service all operations placed on the \texttt{io\_service} queue, with the worker thread staying active until the \texttt{io\_service} is specifically stopped. The next section, Section \ref{chapter:networking:asio:ioservice:queue} discusses how to place operations on the queue.
+
+\subsection{The \texttt{io\_service} Queue}\label{chapter:networking:asio:ioservice:queue}
+
+The \texttt{io\_service} object maintains a queue onto which requests are placed and from which they are serviced; it is a first in, first out (FIFO) queue. Requests get placed on this queue implicitly through the use of some of the Boost.Asio API calls, while others are explicitly placed on the queue through the use of the \texttt{.post} method. Most of the code presented in this book explicitly places requests using \texttt{.post}, therefore, the focus in this chapter is on its use and behavior.
+
+The code in \FigureCode \ref{chapter:networking:ioservice:post-simple} shows how to post a request to an \texttt{io\_service} queue. The \texttt{.post} method expects a \texttt{CompletionHandler}, which is function whose signature accepts no parameters and has a \texttt{void} return. In this example, the function is provided by defining a lambda.
+
+\begin{code}[caption={Posting a Request}, label=chapter:networking:ioservice:post-simple]
+ioService.post(
+  []()
+  {
+    std::cout << "This runs on the io_service thread.";
+  });
+\end{code}
+
+The main application thread, or really any application thread, can post to the \texttt{io\_service} queue, such as the one in \FigureCode \ref{chapter:networking:ioservice:post-simple}. Once the \texttt{io\_service} thread works its way through the items ahead of our request, it will invoke the \texttt{CompletionHandler}. In this example, \texttt{This runs on the io\_service thread.} is output to the console.
+
+\FigureCode \ref{chapter:networking:ioservice:post-multiple} shows a full example of defining a dedicated thread for an \texttt{io\_service}, along with posting several requests to its queue. This example starts by reporting the thread ids for the main application thread and the \texttt{io\_service} thread to help establish which threads are executing which code. Each lambda posted to the \texttt{io\_service} reports the thread from which it is executed, in both cases they report the same thread id as the \texttt{io\_service} reported.
+
+\begin{code}[caption={Multiple Requests}, label=chapter:networking:ioservice:post-multiple]
+void ioServiceQueue()
+{
+  boost::asio::io_service ioService;
+  boost::asio::io_service::work work(ioService);
+
+  std::cout << "main thread id: ";
+  std::cout << std::this_thread::get_id() << std::endl;
+
+  std::thread ioThread = std::thread(
+    [&ioService]()
+    {
+      std::cout << "io_service thread id: ";
+      std::cout << std::this_thread::get_id() << std::endl;
+      ioService.run();
+      std::cout << "io_service terminated" << std::endl;
+    });
+
+  auto notify =
+    []()
+    {
+      std::cout << "This post executed on: ";
+      std::cout << std::this_thread::get_id() << std::endl;
+    };
+
+  ioService.post(notify);
+  ioService.post(notify);
+
+  ioService.stop();
+  ioThread.join();
+}
+\end{code}
+
+The Boost.Asio \texttt{io\_service} queue is fairly easy to understand when seen in action like this. Unfortunately, this is about as simple as it gets, most non-trivial applications that utilize network communication require a more sophisticated usage. The next two sections, Section \ref{chapter:networking:threading} and Section \ref{chapter:networking:strands} provide additional stepping stones to building the necessary understanding.
+
+\section{Boost Asio Thread Pools}\label{chapter:networking:threading}
+
+To develop a truly scalable application, we'll need more than a single background thread servicing requests on an \texttt{io\_service} queue. By definition, a \textit{scalable} application should grow to utilize the available system resources. In the case of the system I'm using to develop the code samples for this book, it has 6 hyper-threaded CPU cores, giving the appearance of 12 CPU cores. A scalable application will take advantage of all the cores on my system, and all of the cores on any other system on which it is run. Thankfully, Boost.Asio provides easy support for \textit{Thread Pools} on the \texttt{io\_service}.
+
+In order to have more than one thread service requests from the \texttt{io\_service} queue, simply create more threads that call the \texttt{io\_service} \texttt{.run} method. \FigureCode \ref{chapter:networking:ioservice:thread-pool} shows an example of creating a thread pool on a single \texttt{io\_service}. Through the use of this technique, multiple requests can be serviced in parallel on a multi-core system.
+
+\begin{code}[caption={\texttt{io\_service} Thread Pool}, label=chapter:networking:ioservice:thread-pool]
+void threadedIoService()
+{
+  boost::asio::io_service ioService;
+  boost::asio::io_service::work work(ioService);
+
+  std::cout << "main thread id: ";
+  std::cout << std::this_thread::get_id() << std::endl;
+
+  std::vector<std::thread> threads;
+  for (auto thread : IRange<uint8_t>(1, std::thread::hardware_concurrency()))
+  {
+    threads.push_back(std::thread(
+      [&ioService]()
+      {
+        ioService.run();
+      }));
+  }
+
+  auto notify =
+    []()
+    {
+      std::cout << "This post executed on: ";
+      std::cout << std::this_thread::get_id() << std::endl;
+    };
+
+  ioService.post(notify);
+  ioService.post(notify);
+
+  ioService.stop();
+  for (auto& thread : threads)
+  {
+    thread.join();
+  }
+}
+\end{code}
+
+\section{Boost Asio Strands}\label{chapter:networking:strands}
+
+Often times it is necessary to queue the requests for a single object to ensure they happen sequentially, while still allowing requests on other objects to be performed in parallel. Consider that the send operations on a socket can not be interleaved, one must complete before the next is started. We'd like to write code that makes non-blocking write requests, but also ensure that the requests are performed in order and that each request is completed before the next one is allowed to begin. In the normal free-for-all world of thread pools and the \texttt{io\_service} object, that isn't guaranteed. Another synchronization capability is needed, one that allows requests on one object to be queued and completed in order while still participating in the context of a thread pool. That capability is provided by \texttt{io\_service::strand}, Boost strands.
+
+A strand can be thought of as an independent synchronization queue within an \texttt{io\_service}. Each \texttt{io\_service::strand} has its own request queue to which service requests are posted. Even though a strand has its own request queue, it is still associated with an \texttt{io\_service}, passed in as a parameter to the strand constructor. Posts are made directly to the strand, rather than to the \texttt{io\_service}. The \texttt{io\_service::strand} ensures that all post requests to a strand will \textit{not} execute concurrently, instead requests are serviced in the order they are posted and each request is completed before the next is started. Note that requests on multiple strands may execute concurrently, it is only requests on each individual strand are executed sequentially.
+
+Strands are illustrated through a \texttt{Countdown} class that is updated within a thread pool, using an \texttt{io\_service::strand} to guarantee the updates are correctly synchronized. All the \texttt{Countdown} class does is post a bunch of requests to its own strand, with the requests updating an internal counter and reporting the value until the count reaches 0. The full \texttt{Countdown} class is shown in \FigureCode \ref{chapter:networking:strand:countdown-class}.
+
+\begin{code}[caption={\texttt{Countdown} Class}, label=chapter:networking:strand:countdown-class]
+class Countdown
+{
+public:
+  Countdown(boost::asio::io_service& ioService, 
+      std::string name, 
+      uint16_t startCount) :
+    m_strand(ioService),
+    m_name(name),
+    m_count(startCount)
+  { }
+
+  void start()
+  {
+    for (auto handler = 0; handler < m_count; handler++)
+    {
+      m_strand.post([&]() { next(); });
+    }
+  }
+
+private:
+  boost::asio::strand m_strand;
+  std::string m_name;
+  uint16_t m_count;
+
+  void next()
+  {
+      std::cout << "Thread id: ";
+      std::cout << std::this_thread::get_id();
+      std::cout << " Name: " << m_name;
+      std::cout << " - Count: " << m_count << std::endl;
+      m_count--;
+  }
+};
+\end{code}
+
+This class defines a private \texttt{strand}, which is associated with the \texttt{io\_service} in the class constructor. It also contains a \texttt{name}, used to identify the instance in console output, and a \texttt{count}, used to track how much longer to continue the countdown. The public method \texttt{start} is called by an application thread to kick off the countdown and reporting for the instance. When invoked, the \texttt{start} method posts \texttt{m\_count} handlers (lambdas) to the object's \texttt{strand}, rather than to an \texttt{io\_service}. As each request is invoked by a thread in the thread pool on the \texttt{io\_service}, the handler reports which thread it is executing on, along with reporting the instance name, and the current value of the counter. The final statement in the hanlder is to subtract one from the value of \texttt{m\_count}.
+
+The application code that demonstrates the use of the \texttt{Countdown} class is found in \FigureCode \ref{chapter:networking:strand:countdown-app}.
+
+\begin{code}[caption={\texttt{Countdown} Application}, label=chapter:networking:strand:countdown-app]
+int main()
+{
+  boost::asio::io_service ioService;
+  boost::asio::io_service::work work(ioService);
+
+  std::vector<std::thread> threads;
+  for (auto thread : IRange<uint8_t>(1, std::thread::hardware_concurrency()))
+  {
+    threads.push_back(std::thread(
+      [&ioService]()
+      {
+        ioService.run();
+      }));
+  }
+
+  Countdown obj1(ioService, "One", 10);
+  Countdown obj2(ioService, "Two", 12);
+
+  obj1.start();
+  obj2.start();
+
+  for (auto& thread : threads)
+  {
+    thread.join();
+  }
+
+  return 0;
+}
+\end{code}
+
+The first part of the code is familiar by now, the definition of an \texttt{io\_service} along with a thread pool to service requests. This is followed by two instances of the \texttt{Countdown} class being created and started. Sample output from a run of this program is shown in \FigureConsole \ref{chapter:networking:strand:countdown-output}. I've modified the output a little bit to clean up an issue from multiptle threads writing to the console (which is not synchronized) concurrently, but only for readability, the meaning is not changed.
+
+\begin{console}[caption={\texttt{Countdown} Output}, label=chapter:networking:strand:countdown-output]
+Thread id: 7788 Name: One - Count: 10
+Thread id: 6652 Name: Two - Count: 12
+Thread id: 11252 Name: One - Count: 9
+Thread id: 7788 Name: One - Count: 8
+Thread id: 11252 Name: Two - Count: 11
+Thread id: 6652 Name: One - Count: 7
+Thread id: 7788 Name: Two - Count: 10
+Thread id: 11252 Name: One - Count: 6
+Thread id: 6652 Name: Two - Count: 9
+Thread id: 7788 Name: One - Count: 5
+Thread id: 11252 Name: Two - Count: 8
+Thread id: 6652 Name: One - Count: 4
+Thread id: 7788 Name: Two - Count: 7
+Thread id: 11252 Name: One - Count: 3
+Thread id: 6652 Name: Two - Count: 6
+Thread id: 7788 Name: One - Count: 2
+Thread id: 11252 Name: Two - Count: 5
+Thread id: 6652 Name: One - Count: 1
+Thread id: 7788 Name: Two - Count: 4
+Thread id: 11252 Name: Two - Count: 3
+Thread id: 7788 Name: Two - Count: 2
+Thread id: 11252 Name: Two - Count: 1
+\end{console}
+
+A careful read through the output shows that each \texttt{Countdown} instance correctly (in-order) performs the countdown as intended. Note also that different thread ids are reported being used on the same \texttt{Countdown} instances. In fact, three different threads were used by the system to service the different requests.
+
+The \texttt{io\_service} and \texttt{strand}s are a part of the Boost.Asio library, and are intended for use in synchronizing I/O operations, but as this code demonstrates, they can be used as a general synchronization resource. To clarify, this code uses the \texttt{io\_service} as a thread pool, then uses \texttt{strand}s as a synchronization object. No where in this code is a mutex defined and used for synchronization, that is taken care of by the Boost.Asio implementation.
+
+\section{Boost Asio Socket Connections}\label{chapter:networking:sockets}
+
+Sockets in Boost.Asio are familiar to anyone already experienced in regular sockets programming, only a little easier to use because of the simplied syntax and elimination of platform initialization dependencies. The sockets API in Boost.Asio provides for both synchronous and asynchronous programming models. The code presented in this chapter, and throughout the book, relies primarily on asynchronous techniques, with a few synchronous pieces where scalability is not an issue.
+
+There are two fundamental components needed to understand socket programming in Boost.Asio. The first is how to make and receive a connection, the second is how to send and receive data. For the purposes of this section, a \textit{server} is the application that receives a connection, and a \textit{client} is the application that initiates a connection. The words \textit{server} and \textit{client} are only ways to refer to different application components. They are used in one way in this chapter, and differently in later parts of this book. Section \ref{chapter:networking:sockets:connection} discusses making connections, and Section \ref{chapter:networking:sockets:data:intro} discusses sending and receiving of data.
+
+Take note that all the techniques described in this chapter, and throughout the book, utilize TCP communication. Many of the programming concepts and techniques are similar between TCP and UDP. While knowing the TCP programming model is helpful to understanding similar looking UDP API, UDP application development is a different model, one not covered in this book.
+
+\subsection{Boost \texttt{endpoint} and IPv4 \& IPv6}
+
+Before getting into the details of making connections and sending data, it is important to discuss the Boost \texttt{endpoint} type. An \texttt{endpoint} describes an endpoint that can be associated with a socket. An \texttt{endpoint} constructor can accept an IP address and port for a known endpoint, alternatively, it can accept an \texttt{InternetProtocol} and port when waiting on an incoming connection. In the first case, the IP address can be either an IPv4 or IPv6 address. Similarly, in the second case, the \texttt{InternetProtocol} can specify either IPv4 or IPv6. Regardless of the address type to which an \texttt{endpoint} is bound, either IPv4 or IPv6, the Boost.Asio sockets API is used the same. This makes it possible for an application to easily move to IPv6 when necessary, or alternatively support both protocols at the same time.
+
+\subsection{Making a Connection}\label{chapter:networking:sockets:connection}
+
+There are two participants in a connection, one that waits for an incoming connection (our server), and another that initiates a connection (our client). The server knows nothing about a client before the connection is made, it must wait for an incoming connection from any address; but on a specific port. The client, on the other hand, has knowledge of the server address and the port on which it is listening. These differences result in different programming techniques between the two applications.
+
+\subsubsection{Accepting a Connection}\label{chapter:networking:accept-connection}
+
+The server components include an \texttt{acceptor}, a \texttt{socket}, and an \texttt{endpoint}. The \texttt{acceptor}, as its name suggests, is used to accept incoming socket connections. A \texttt{socket} is the communication channel through which data is sent and received. Finally, the \texttt{endpoint}, as described in the previous section, provides an address (IP and port) to which a \texttt{socket} is bound. \FigureCode \ref{chapter:networking:sockets:accept-connection} shows sample code used to wait for an incoming connection.
+
+\begin{code}[caption={Acccepting a Connection}, label=chapter:networking:sockets:accept-connection]
+//
+// Code segment that initiates the first handleNewConnection
+{
+...
+  std::shared_ptr<ip::tcp::acceptor> acceptor = 
+    std::make_shared<ip::tcp::acceptor>(
+      ioService, 
+      ip::tcp::endpoint(ip::tcp::v4(), 12345));
+
+  handleNewConnection(ioService, acceptor);
+...
+}
+
+void handleNewConnection(
+    boost::asio::io_service& ioService, 
+    std::shared_ptr<ip::tcp::acceptor> acceptor)
+{
+  std::shared_ptr<ip::tcp::socket> socket = 
+    std::make_shared<ip::tcp::socket>(ioService);
+  acceptor->async_accept(*socket, 
+    [&ioService, acceptor, socket]
+    (const boost::system::error_code& error)
+    {
+      if (!error)
+      {
+        std::cout << "Received connection from: ";
+        std::cout << socket->remote_endpoint();
+        std::cout << " on thread id: ";
+        std::cout << std::this_thread::get_id() << std::endl;
+      }
+      handleNewConnection(ioService, acceptor);
+    });
+}
+\end{code}
+
+An \texttt{acceptor} is initialized with an \texttt{io\_service} along with an \texttt{endpoint} which indicates the protocol to use along with the port on which the server will listen for incoming connections. It is also necessary to create a default constructed \texttt{socket}; this is the socket into which the connection will be accepted.
+
+The \texttt{acceptor}, like much of Boost.Asio, provides both synchronous and asynchronous interfaces for accepting connections. The synchronous method is \texttt{.acccept}, while the asynchronous method is \texttt{.async\_accept}, as shown in \FigureCode \ref{chapter:networking:sockets:accept-connection}. The asynchronous method needs an \texttt{AcceptHandler} to call upon receipt of a connection, which is provided by the lambda. Only one acceptor should ever be created to listen on a port. Because of this, the sample code in \ref{chapter:networking:sockets:accept-connection} shows part of the code segment that initiates the first \texttt{handleNewConnection} by creating the \texttt{acceptor} and passing it in as a parameter for continued reuse.
+
+The reason for capturing the \texttt{acceptor} and \texttt{socket} by value is to ensure they have a lifetime beyond the invocation of the \texttt{handleNewConnection} function. \texttt{.async\_accept} is a non-blocking call, which means that \texttt{handleNewConnection} is also a non-blocking call. However, the lambda continues to exist, along with everything it has captured after \texttt{handleNewConnection} has exited, being invoked when a new connection is made.  The \texttt{shared\_ptr}s are captured by copy, using the smart pointer reference counting ensures they live for the life of the lambda, rather than going out of scope and releasing the managed objects when the \texttt{handleNewConnection} function exits.
+
+\subsubsection{Initiating a Connection}\label{chapter:networking:init-connection}
+
+The client components include a \texttt{query}, a \texttt{resolver}, an \texttt{iterator}, and a \texttt{socket}. The \texttt{query} is used to find the server; in simple terms, an IP address and port. A \texttt{resolver} takes a \texttt{query} and determines the list of \texttt{endpoint}s that result. The \texttt{iterator} is used to iterate over the list of \texttt{endpoint}s returned by the \texttt{resolver}; a \texttt{query} may return more than one endpoint, making an \texttt{iterator} necessary. Finally, the \texttt{socket} is the same as with the server, a channel over which communication takes place.
+
+\begin{code}[caption={Initiating a Connection}, label=chapter:networking:sockets:init-connection]
+ip::tcp::resolver::query query("127.0.0.1", "12345");
+ip::tcp::resolver resolver(ioService);
+ip::tcp::resolver::iterator iterator = resolver.resolve(query);
+
+ip::tcp::socket socket(ioService);
+boost::asio::async_connect(socket, iterator,
+  [](const boost::system::error_code& error, 
+     ip::tcp::resolver::iterator iterator)
+  {
+    if (!error)
+    {
+      ip::tcp::endpoint endpoint(*iterator);
+      std::cout << "Made a connection to: ";
+      std::cout << endpoint;
+      std::cout << " on thread id: ";
+      std::cout << std::this_thread::get_id() << std::endl;
+    }
+  });
+\end{code}
+
+\FigureCode \ref{chapter:networking:sockets:init-connection} shows the code to initiate a connection with a waiting application. The \texttt{query} is initialized with the IP address and port of an application known to be waiting for incoming connections; a \texttt{query} can be more sophisticated than this, but this simple approach suffices for the purposes of this book. The \texttt{resolver} is initialized with the \texttt{io\_service} and then passed a \texttt{query} when the \texttt{.resolve} method is invoked. The resolver does provide an asynchronous \texttt{.async\_resolve} method, but is not necessary in this context. Next, the free \texttt{async\_connect} function is used to make the connection to the server.
+
+Like the server code, the client uses an asynchronous approach to making the connection. While the client isn't concerned with scalability in this regard, taking this approach allows the application thread to continue execution while waiting on the connection to complete. Then, once the connection is made, the connection lambda is invoked on an \texttt{io\_service} thread.
+
+\section{Boost Asio Sending \& Receiving Data}\label{chapter:networking:sockets:data:intro}
+
+Sending and receiving of data is as simple or complex as your application requires. On the simple end of the spectrum, all writes and reads can be done synchronously. On the complex end, all writes and reads need to be done asynchronously. The ability to invoke synchronous or asynchronous writes and reads is simple in itself, the complexity arises in their correct use within an application. This part of the chapter begins with an introduction to Boost buffers in Section \ref{chapter:networking:sockets:data:buffers}, then continues by showing simple write and read operations over sockets in Section \ref{chapter:networking:sockets:data:simple}, and finishes by showing the use of Boost strands to synchronize multi-threaded writes over a single socket in Section \ref{chapter:networking:sockets:data:multi-threaded}.
+
+\subsection{Boost Buffers}\label{chapter:networking:sockets:data:buffers}
+
+It is necessary to discuss the various Boost.Asio write and read techniques that utilize \texttt{boost::asio::buffer}s, which come in both constant and mutable flavors. Mutable buffers can be used for both sending and receiving of data, whereas constant buffers can only be used for sending. This chapter presents only an introduction to Boost buffers, while Chapter \ref{chapter:coding} develops a general approach to taking application data structures and efficiently converting them for use in network communicaton via Boost buffers.
+
+Boost buffers provide a consistent representation of data to the various Boost.Asio functions and methods. A \texttt{boost::asio::buffer} is a lightweight class that points to existing data, rather than owning it. Stated simply, the buffer contains a void pointer (\texttt{void*}) to a sequence of bytes in memory, along with a count of the number of bytes in the sequence. \textit{Boost buffers do not own the underlying data!} If the data goes out of scope, the pointer to the data the buffer holds becomes invalid. The original data must stay in scope for the lifetime of the buffer.
+
+Because buffers are the only way to perform network communication, the trick is in how to create a buffer that refers to the application memory. Thankfully, for most Plain Old Data (POD) types it is easy, there are many overloads of the \texttt{boost::asio::buffer} function that take these types and return either a mutable or constant buffer.
+
+Let's begin by creating a buffer that refers to the data contained within a \texttt{std::array}. A \texttt{std::array} contains a contiguous sequence of bytes, interpreted according to however the array has been typed. The \texttt{.data} member of the array returns a typed pointer to the underlying raw data, which is useful when creating a Boost buffer that refers to the array. \FigureCode \ref{chapter:networking:buffer-array} shows how to create a Boost buffer for a \texttt{std::array}.
+
+\begin{code}[caption={Boost Buffer on a \texttt{std::array}}, label=chapter:networking:buffer-array]
+std::array<uint16_t, 10> myArray;
+auto myBuffer = boost::asio::buffer(
+  myArray.data(), 
+  myArray.size() * sizeof(uint16_t));
+\end{code}
+
+Using the \texttt{.data} method, along with the \texttt{.size} method and the \texttt{sizeof} operator provides the parameters necessary to construct a mutable buffer.
+
+The example in \FigureCode \ref{chapter:networking:buffer-array} shows the general case for creating a buffer, however, it is possible to use a more simplified syntax to create a buffer over a \texttt{std::array}.  \FigureCode \ref{chapter:networking:buffer-array-simple} shows the simplified syntax, the \texttt{buffer} function simply accepts the array as the parameter.
+
+\begin{code}[caption={Simplified Boost Buffer on a \texttt{std::array}}, label=chapter:networking:buffer-array-simple]
+std::array<uint16_t, 10> myArray;
+auto myBuffer = boost::asio::buffer(myArray);
+\end{code}
+
+It isn't quite true to say that \texttt{boost::asio::buffer} creates and returns a single buffer, it actually returns either a \texttt{mutable\_buffers\_1} or \texttt{const\_buffers\_1}. These classes actually represent a sequence of buffers, and in all the examples shown in this section (and throughout the book), it is always a sequence of 1. The Boost.Asio methods also accept buffer sequences, making it valid to use the \texttt{boost::asio::buffer} function to return a buffer sequence, even though the sequence contains a single buffer.
+
+The code segment shown in \FigureCode \ref{chapter:networking:buffer-uint16} shows how to take a primitive type and create a buffer over it. It is necessary to take the address of the \texttt{uint16\_t} because the buffer needs to point to the bytes of the data, and then again, the \texttt{sizeof} operator is used to determine the number of bytes in the raw data sequence.
+
+\begin{code}[caption={Boost Buffer on an \texttt{uint16\_t}}, label=chapter:networking:buffer-uint16]
+uint16_t myInt = 4;
+auto myIntBuffer = boost::asio::buffer(&myInt, sizeof(myInt));
+\end{code}
+
+With the background knowledge of creating buffers, it is possible to move on to using them for sending and receiving data via network communication.
+
+\subsection{Simple Write \& Read}\label{chapter:networking:sockets:data:simple}
+
+Once a connection is established and both the sender and receiver share a socket for communication, the various send and receive techniques can be applied. This section utilizes a relatively simple synchronous send and asynchronous receive between two applications. The sender only sends data, and the receiver only receives data.
+
+Every application must define a protocol for sending and receiving of data; a receiver must know what to expect from the sender. The code samples shown in this section send and receive a variable length string message. The protocol for this requires the sender first send a 16-bit (two bytes) integer value that indicates how many characters to expect in the string message. This is followed by sending that many characters.
+
+\FigureCode \ref{chapter:networking:send-simple} contains code that sends ten messages to a receiver over a connected socket. The message is generated at the start of the loop, followed by using the free \texttt{boost::asio::write} function to send the size of the message, which is then followed by sending of the bytes that compose the message.
+
+\begin{code}[caption={Simple Synchronous Send}, label=chapter:networking:send-simple]
+void sendMessages(std::shared_ptr<ip::tcp::socket> socket)
+{
+  for (auto line : IRange<uint8_t>(1, 10))
+  {
+    std::ostringstream os;
+    os << "This is line #" << line << std::endl;
+
+    uint16_t sendSize = os.str().size();
+    boost::asio::write(*socket, 
+      boost::asio::buffer(&sendSize, sizeof(uint16_t)));
+    boost::asio::write(*socket, boost::asio::buffer(os.str()));
+  }
+}
+\end{code}
+
+The reason for using \texttt{boost::asio::write} instead of something like \texttt{tcp::socket::send} or \texttt{tcp::socket::write\_some} is that the former won't return until all the data has been written (or an error occurs), whereas the later methods are not guaranteed to complete the write operations. In all cases, there are overloads that allow a write, or completion handler (a lambda) to be specified which indicates what did or didn't happen during the write. As a simple introduction, \texttt{boost::asio::write} suffices.
+
+The reciever code for this example uses an asynchronous approach to waiting for the message to arrive. The reason for doing this is to allow the application to continue doing something on the main thread, and let one of the \texttt{io\_service} threads handle the incoming data, and also only tie up one of those threads when there actually is something to receive. \FigureCode \ref{chapter:networking:receive-simple} shows the code used to wait for, and then receive a message. At first glance it may not look so \textit{simple}, but after working through it step-by-step it will become clear.
+
+\begin{code}[caption={Simple Asynchronous Receive}, label=chapter:networking:receive-simple]
+void handleNextMessage(
+  std::shared_ptr<ip::tcp::socket> socket, 
+  uint16_t socketID)
+{
+  using boost::asio::buffer;
+  using boost::system::error_code;
+
+  if (!socket->is_open()) return;
+
+  std::shared_ptr<uint16_t> bufferSize = std::make_shared<uint16_t>();
+  boost::asio::async_read(
+    *socket,
+    buffer(bufferSize.get(), sizeof(uint16_t)), 
+    [socket, bufferSize]
+    (const error_code& error, std::size_t bytes)
+    {
+      if (!error)
+      {
+        std::string receiveString;
+        receiveString.resize(*bufferSize);
+        boost::asio::read(
+          *socket, buffer(
+            const_cast<char*>(receiveString.data()), 
+            *bufferSize));
+        std::cout << "Received from " << socketID  << " : " << receiveString;
+
+        handleNextMessage(socket);
+      }
+    });
+}
+\end{code}
+
+At the start of the function the socket is tested to see if it is open, if it isn't, no need to try to receive. Because \texttt{handleNextMessage} is a non-blocking function itself, it is necessary to dynamically allocate memory for where to place the first two bytes of data expected, a \texttt{uint16\_t} indicating the size of the message. If this memory were not allocated and a local variable was used and captured in the lambda, the local variable would go out of scope and when the read occurs, it will access an invalid memory location.
+
+The final part of the function is a call to the free \texttt{boost::asio::async\_read} function. This function expects a socket over which to listen, a buffer to write the result, and a handler to invoke when the read is complete. \texttt{boost::asio::async\_read} is a non-blocking function, it calls into the \texttt{io\_service} associated with the socket and leaves the read handler pending receipt of the data. When data is received, the read handler is invoked by a thread associated with the \texttt{io\_service}.
+
+Because the received message is going to be displayed to the console, a \texttt{std::string} is declared and set to the correct size and used as the destination buffer for the read. There is a Boost buffer overload that takes a \texttt{std::string}, but it returns a constant buffer, which can't be the destination for a read. Because we know what we are doing, it is necessary to do a little white lie about the type of buffer we are handing off to \texttt{boost::asio::buffer}. The \texttt{const\_cast} is used to remove \texttt{const} from the type returned by the \texttt{.data} member. Doing this allows a mutable buffer to be created and used as the destination buffer for the read operation. By doing this, the read operation writes directly into the string, eliminating a write into one location in memory and then copy into the string later on.
+
+A note of caution in relying upon \texttt{.data()} to return a pointer to the underlying \texttt{std::string} representation: Not everyone agrees this is correct, safe, and portable to do. My experience with C++11 on using both Visual Studio 12 and gcc 4.7 (on x86 platforms) have worked in the interoperable way I desire. As with all things, your mileage may vary. The only way to know is to test on your expected platforms. An alternative approach is to encode the characters from the \texttt{std::string} into a \texttt{std::vector}, transmite/recieve that vector, then recompose those characters into a \texttt{std::string}.
+
+Inside the read handler the synchronous \texttt{boost::asio::read} function is used to receive the rest of the message. In this case, it is reasonable to use a synchronous read because the code is already running in the context of an \texttt{io\_service} thread; it isn't going to block the main application. Alternatively, the handler could be written to use another asynchronous read, which may provide for better scalability. However, the initial asynchronous read, followed by a synchronous read is sufficient for a large number of applications.
+
+\subsection{Multi-Threaded Writes}\label{chapter:networking:sockets:data:multi-threaded}
+
+Using multiple threads, or thread pools, in support of scalable network communications adds an additional layer of complexity. Multiple sockets can be serviced concurrently, and reads and writes on a single socket can be serviced concurrently, but over a single socket neither multiple reads nor multiple writes can be interleaved. Therefore, the key synchronization that must be handled is to ensure that reads and writes over a single socket are correctly ordered, this is where Boost strands become invaluable.
+
+Ensuring a single thread reads from a socket is relatively straightforward by using a single \texttt{.async\_receive} to wait for incoming data over each socket, then posting an \texttt{io\_service} request to read the remaining data. However, we want the ability to post writes to a socket from any thread without having to require those threads coordinate among themselves to avoid interleaving their communication. This is where Boost strands come into play. Strands perform the synchronization necessary to ensure that each write request is completed in the order received and that each request is completed before the next one is started. The technique is to associate a strand with each socket, and post all write requests for a socket to its associated strand. The remainder of this section works through a code example that demonstrates this.
+
+The receiver, or server, for this example is exactly the same as described in Section \ref{chapter:networking:sockets:data:simple}. The implementation for that receiver works correctly for communication with any client, even if the client is multi-threaded. In fact, the receiver works correctly for multiple sender processes, communicating over multiple sockets. The only modification that might be desired is to add a thread pool on the \texttt{io\_service} to allow multiple sockets to be serviced concurrently.
+
+The first part of the sender, or client, code is a class that represents a \textit{sender}. A sender is an object that runs on its own thread, sending messages over a shared socket, using a strand associated with the socket to post its send requests. \FigureCode \ref{chapter:networking:sender:overview} shows a section of the \texttt{Sender} class that contains the public interface, along with the important private attributes.
+
+\begin{code}[caption={\texttt{Sender} Class Overview}, label=chapter:networking:sender:overview]
+class Sender
+{
+public:
+  Sender() :
+    m_socket(nullptr),
+    m_strand(nullptr)
+  {
+  }
+
+  void startSending(
+    std::shared_ptr<ip::tcp::socket> socket, 
+    std::shared_ptr<boost::asio::strand> strand)
+  {
+    m_socket = socket;
+    m_strand = strand;
+    m_thread = std::make_shared<std::thread>(
+      [this]()
+      {
+        sendMessages();
+      });
+  }
+
+private:
+  std::shared_ptr<std::thread> m_thread;
+  std::shared_ptr<ip::tcp::socket> m_socket;
+  std::shared_ptr<boost::asio::strand> m_strand;
+}
+\end{code}
+
+The private members of the class, \texttt{m\_thread}, \texttt{m\_socket}, and \texttt{m\_strand} are the important data components for each sender.  The \texttt{m\_thread} is unique to each sender, as each sender executes on its own thread. On the other hand, \texttt{m\_socket} and \texttt{m\_strand} are shared among all sender objects; this example has only a single socket for communication. The socket is associated with a strand, with the intention the strand is used by all threads to post send requests to the socket. The \texttt{startSending} method creates a thread that moves forward with sending messages. Therefore, each sender is sending messages on a different thread.
+
+\FigureCode \ref{chapter:networking:senders-start} shows the client code that is executed after a connection is made with a receiver. Once a connection is made, it is okay to create a \texttt{boost::asio::strand} that is associated with the newly connected socket. Each sender instance is then told to start sending messages, and passed which socket to use, along with the strand assoicated with the socket.
+
+\begin{code}[caption={Start Sending Messages}, label=chapter:networking:senders-start]
+auto strand = std::make_shared<boost::asio::strand>(ioService);
+for (auto sender : senders)
+{
+  sender->startSending(socket, strand);
+}
+\end{code}
+
+When \texttt{startSending} is called, it creates a thread that invokes the \texttt{sendMessages} method. This method, shown in \FigureCode \ref{chapter:networking:sender:send-messages}, initiates the message send requests. Rather than directly sending the messages in this method, this method posts 5 requests to the strand associated with the socket. Each of these requests is another lambda function which ends up calling the \texttt{sendMessage} method to handle the actual sending of the messages. The reason for using a lambda is to provide the \texttt{.post} method a function with the correct signature.
+
+\begin{code}[caption={Sending Messages}, label=chapter:networking:sender:send-messages]
+void sendMessages()
+{
+  for (auto line : IRange<uint16_t>(1, 5))
+  {
+    m_strand->post([this, line]() { sendMessage(line); });
+  }
+}
+
+void sendMessage(uint16_t line)
+{
+  std::ostringstream os;
+  os << "This is line #" << line << std::endl;
+
+  uint16_t sendSize = os.str().size();
+  boost::asio::write(*m_socket, 
+    boost::asio::buffer(&sendSize, sizeof(uint16_t)));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  boost::asio::write(*m_socket,boost::asio::buffer(os.str()));
+
+  std::cout << "Sent: " << os.str();
+}
+\end{code}
+
+Because \texttt{sendMessages} makes posts to the strand associated with the socket, and that the code in \texttt{sendMessage} uses synchronous calls, we are guaranteed that all socket communication across all threads happens in the order they are posted and without any concern for interleaving.
+
+Take note of the \texttt{sleep\_for} call in the \texttt{sendMessage} method, why is it there? The reason I have placed it there is to help emphasize that no matter how long the blocking \texttt{sendMessage} takes, including how many (synchronous) socket calls it makes, that all calls work correctly. It is also important to know that the client code is written with a thread pool on the \texttt{io\_service}. Meaning that the client code is not only multi-threaded on the \texttt{io\_service}, but also multi-threaded on the senders, while still correctly sending messages over a single socket.
+
+Sample output from the receiver in a run of this application using a single reciever and two sender processes is shown in \FigureConsole \ref{chapter:networking:sender:output}. The first line is a report of the thread id of the \texttt{io\_service}, following by the connection report of the first sender process. The first sender process begins sending messages, and then the second sender process makes a connection. The remainder of the output is from both sender processes sending their messages. Remember that each sender is multi-threaded, with two threads, that is the reason there are four of each message in the output, two from each multi-threaded sender process.
+
+\begin{console}[caption={Multi-Threaded Send/Receive Output}, label=chapter:networking:sender:output]
+io_service thread id: 8836
+Received connection from: 127.0.0.1:61874 on thread id: 8836
+Received from 1 : This is line #1
+Received from 1 : This is line #2
+Received from 1 : This is line #3
+Received from 1 : This is line #4
+Received from 1 : This is line #5
+Received connection from: 127.0.0.1:61877 on thread id: 8836
+Received from 1 : This is line #1
+Received from 2 : This is line #1
+Received from 1 : This is line #2
+Received from 2 : This is line #2
+Received from 1 : This is line #3
+Received from 2 : This is line #3
+Received from 1 : This is line #4
+Received from 2 : This is line #4
+Received from 1 : This is line #5
+Received from 2 : This is line #5
+Received from 2 : This is line #1
+Received from 2 : This is line #2
+Received from 2 : This is line #3
+Received from 2 : This is line #4
+Received from 2 : This is line #5
+\end{console}
+
+For proof that posting to a \texttt{strand} versus the common \texttt{io\_service} make any difference, replace the strand post code from \FigureCode \ref{chapter:networking:sender:send-messages} with the code shown in \FigureCode \ref{chapter:networking:sender:send-bad}. This changes the posts to be done on the general \texttt{io\_service} instead of the \texttt{strand} associated with the socket. The \texttt{io\_service} does not offer the same ordering and completion guarantee provided by a \texttt{strand}. Therefore, when the client is run, the writes to the socket get interleaved and the receiver gets confused and the protocol breaks down and fails to complete.
+
+\begin{code}[caption={Incorrect Service Request}, label=chapter:networking:sender:send-bad]
+m_socket->get_io_service().post([this, line]() { sendMessage(line); });
+\end{code}
+
+\section{Summary}\label{chapter:networking:summary}
+
+Even though this chapter is considered an introduction to network programming with Boost, in reality, a high level of sophistication is presented. This chapter has introduced Boost.Asio and its model, the use of thread pools on an \texttt{io\_service}, the concept of strands, making connections, and communicating over sockets, including the use of multiple senders, each on their own thread, and over the same socket. These techniques cover almost everything that is used to build the programs presented in the remainder of the book
+
+One outcome I hope that comes through in the code presented in this chapter is how concise and readable the programs are, in addition to being cross-platform over a wide number of operating systems and compilers. This is due to the well designed Boost.Asio library, but also made possible through the C++11 language and standard library improvements.

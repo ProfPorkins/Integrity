@@ -1,0 +1,381 @@
+% Copyright © 2015 by James Dean Mathias
+% All Rights Reserved
+
+\chapter{Scalability - Fault-Tolerant - Task Dependencies}\label{chapter:ftdag}
+
+The final evolution of the code in this book is to return to the topic of Chapter \ref{chapter:scalable-dag} and incorporate the ability to have the executation of a task, or tasks, depend upon the completion of another task, or tasks, within the context of the distributed and fault-tolerant system. With this final step, we end up with a powerful system, one that exceeds the original goal of the book: a scalable, distributed, and fault-tolerant system, with the added sophistication of being able to handle arbitrary dependency complexity among tasks.
+
+The heavy lifting for the task dependency work was done back in Chapter \ref{chapter:scalable-dag} with the introduction and integration of the \texttt{ConcurrentDAG}. As a result, this chapter is fairly light, focusing only on the changes necessary to migrate the fault-tolerant code from Chapter \ref{chapter:ft} to make use of the \texttt{ConcurrentDAG} to ensure task dependecies are supported.
+
+\section{Framework Changes}\label{chapter:ftdag:section:framework-changes}
+
+The core framework is changed in three fairly minor ways. The first is the complete removal of the concept of priority. While it is possible to have the concept of priority with task dependencies, that is not a topic covered by this book. The next change is to use the \texttt{ConcurrentDAG} in place of the \texttt{ConcurrentMultiqueue}. The final change is an update to the \texttt{finalizeTask} method of the \texttt{TaskRequestQueue}.
+
+As just noted, the \texttt{m\_queueTasks} is changed from a \texttt{ConcurrentMultiqueue} to the \texttt{ConcurrentDAG} first introduced in Chapter \ref{chapter:scalable-dag}. Making this change does result in some other code changes because its interface is different. For example, the \texttt{ConcurrentDAG} has the concepts of adding a node (a single task) or an edge (dependent tasks), whereas the \texttt{ConcurrentMultiqueue} only has the concept of adding tasks (a node in the \texttt{ConcurrentDAG}). Additionally, the \texttt{enqueueTask} method that allows dependent tasks to be defined is added to the \texttt{TaskRquestQueue}, providing a way to add tasks with dependencies between them.
+
+In addition to using the \texttt{ConcurrentDAG}, there is one small change in the code from Chapter \ref{chapter:scalable-dag}; this is the same change as was done to the \texttt{ConcurrentPriorityQueue} as discussed in Section \ref{chapter:dist:section:concurrent-priorityqueue} of Chapter \ref{chapter:dist}. The return type for the \texttt{dequeue} operation is now a \texttt{boost::optional}. Again, now that the \texttt{boost} library is a part of the project, it makes sense to change this return type.
+
+The change to the \texttt{finalizeTask} method is worth a closer look; \FigureCode \ref{chapter:ftdag:code:finalize-task} shows the updated code. The first new item is the addition of the \texttt{dagRemove} parameter. When this parameter is set to \texttt{true}, the task is removed from the DAG (\texttt{m\_queueTasks}) allowing its dependent tasks to be released for computation. The reason for not removing the task from the DAG is for fault-tolerance. In the case of a server failure it is desired the task remains in the DAG to ensure its dependent tasks are not yet released. The final change is at the bottom of the function, a \texttt{.notify\_all} call is made on the condition variable \texttt{m\_eventTask} to allow the distributor to immediately look at any tasks that may have been released for computation.
+
+\begin{code}[caption={Updated \texttt{finalizeTask}}, label=chapter:ftdag:code:finalize-task]
+bool TaskRequestQueue::finalizeTask(
+  uint32_t id,
+  bool dagRemove,
+  bool forceRemove)
+{
+  std::lock_guard<std::recursive_mutex> lock(m_mutexAssigned);
+  bool removed = false;
+
+  auto it = m_mapAssigned.find(id);
+  if (it != m_mapAssigned.end())
+  {
+    if (dagRemove)
+    {
+      m_queueTasks.finalize(it->second->getTask());
+    }
+
+    std::chrono::time_point<std::chrono::high_resolution_clock> 
+      now = std::chrono::high_resolution_clock::now();
+    if (it->second->getDeadline() >= now || forceRemove)
+    {
+      m_mapAssigned.erase(it);
+      removed = true;
+    }
+  }
+
+  m_eventTask.notify_all();
+  return removed;
+}
+\end{code}
+
+That is all, the changes to the framework are quite modest. This is due to a reasonable (admittedly not perfect) design that abstracts different layers of the system from each other. In particular, this allows a near drop-in replacement of going from a priority queue like data structure with a DAG data structure for the ordering of tasks for computation.
+
+\section{Application Interface}
+
+There are two ways in which tasks are added to the updated framework. The first is to add tasks and have them computed in the order they were placed on the \texttt{TaskRequestQueue}. This is as simple as creating the task, same as the previous two chapters (minus priority), and calling \texttt{enqueueTask} on the \texttt{TaskRequestQueue}. The second way is to add tasks but define a dependency relationship between them. This is the same concept introduced in Chapter \ref{chapter:scalable-dag}. Nothing new here from the application interface. The big change, and transparent to the application code, is that the tasks are distributed among as many compute servers as are connected, in addition to being fault-tolerant.
+
+With all of the above in place, the application interface to the \texttt{TaskRequestQueue} includes the members shown in \FigureCode \ref{chapter:ftdag:code:trq-interface}:
+
+\begin{code}[caption={\texttt{TaskRequestQueue} Interface}, label=chapter:ftdag:code:trq-interface]
+void beginGroup();
+void endGroup();
+void enqueueTask(std::shared_ptr<Tasks::Task> source);
+void enqueueTask(
+  std::shared_ptr<Tasks::Task> source,
+  std::shared_ptr<Tasks::Task> dependent);
+bool finalizeTask(
+  uint32_t id,
+  bool dagRemove,
+  bool forceRemove);
+\end{code}
+
+To add a task with no dependencies, only the \texttt{enqueueTask} method is called. When the task is complete (i.e. results returned), the \texttt{finalizeTask} method must be called.
+
+To define dependencies among tasks, all tasks that have dependency relationships must be added as a group. The first step is to call \texttt{beginGroup}, followed by using the overloaded \texttt{enqueueTask} method that allows two tasks to be added; where the second task cannot be computed until the first task is completed. Once all tasks are added and \texttt{endGroup} is called, which allows the scheduling to begin selecting tasks and distributing them for computation. The next two sections of this chapter, Section \ref{chapter:ftdag:demo:mandelbrot} and Section \ref{chapter:ftdag:demo:complex} show detailed examples of using the interface to add tasks with dependencies.
+
+\section{Mandelbrot Changes}\label{chapter:ftdag:demo:mandelbrot}
+
+In Chapters \ref{chapter:dist} and \ref{chapter:ft} the \texttt{Mandelbrot} class used a couple of member variables, \texttt{m\_tasksSent} and \texttt{m\_tasksReceived}, to track when all the results for a single Mandelbrot image were complete and available for display. This works well enough, but I thought it would be interesting to show another way to achieve this same functionality through the use of task dependencies, letting the system framework help track when an image is complete. I am not necessarily recommending this is a better approach (in fact it can be argued it is somewhat less performant because of the networking time involved) but merely making this change to show how task dependencies work.
+
+The first change is to create a new task type, it is called \texttt{MandelFinishedTask}; the class declaration for this task is shown in \FigureCode \ref{chapter:ftdag:code:mandel-finished-task}. This task has no actual computation associated with it, instead, it is used as a way for the application code to send a message to itself when all other Mandelbrot tasks are complete. In other words, its \textit{execution} is dependent upon the completion of all \texttt{MandelTask} executions.
+
+\begin{code}[caption={\texttt{MandelFinishedTask} Class}, label=chapter:ftdag:code:mandel-finished-task]
+class MandelFinishedTask : public Task
+{
+public:
+  MandelFinishedTask() :
+    Task(std::chrono::milliseconds(1000))
+  {
+  }
+
+  MandelFinishedTask(
+    std::shared_ptr<ip::tcp::socket> socket,
+    Messages::MandelFinishedMessage& message) :
+    Task(socket, message.getTaskId())
+  {
+  }
+
+  virtual void execute() override;
+
+protected:
+  virtual std::shared_ptr<Messages::Message> getMessage() override;
+  virtual std::shared_ptr<Messages::Message> 
+    completeCustom(boost::asio::io_service& ioService) override;
+};
+\end{code}
+
+With the new \texttt{MandelFinishedTask} available as a kind of application signal, it can be used in combination with the existing \texttt{MandelTask} task to inform the application code when the full Mandelbrot image is available. Take a look at the updated \texttt{startNewImage} method in \FigureCode \ref{chapter:ftdag:code:start-new-image} to see how the task dependencies are defined.
+
+\begin{code}[caption={Generation Mandelbrot Tasks}, label=chapter:ftdag:code:start-new-image]
+void Mandelbrot::startNewImage()
+{
+  TaskRequestQueue::instance()->beginGroup();
+
+  auto taskFinished = std::make_shared<Tasks::MandelFinishedTask>();
+
+  double deltaX = (m_mandelRight - m_mandelLeft) / m_sizeX;
+  double deltaY = (m_mandelBottom - m_mandelTop) / m_sizeY;
+	
+  for (auto row : IRange<uint16_t>(0, m_sizeY - 1, MANDEL_COMPUTE_ROWS))
+  {
+    auto task = std::make_shared<Tasks::MandelTask>(
+        row, 
+        std::min(row + MANDEL_COMPUTE_ROWS - 1, m_sizeY - 1), 
+        m_sizeX, m_mandelLeft, m_mandelTop + row * deltaY, 
+        deltaX, deltaY, 
+        MANDLE_MAX_ITERATIONS);
+    TaskRequestQueue::instance()->enqueueTask(
+      task, 
+      taskFinished);
+  }
+
+  TaskRequestQueue::instance()->endGroup();
+}
+\end{code}
+
+The first step in this method is to call \texttt{beginGroup} to ensure all of the Mandelbrot tasks are added before any are considered for scheduling. The second step is to create the \texttt{MandelFinishedTask} so that it can be identified in the \texttt{enqueueTask} calls as a dependent. The third step is to define \texttt{taskFinished} as being dependent upon every other \texttt{MandelTask} computation before it can be sent out for \textit{execution}. Finally, the \texttt{endGroup} method is called on the \texttt{TaskRequestQueue} which releases all of these tasks for computation.
+
+In the \texttt{FaultTolerantApp} class, a new \texttt{processMandelFinishedResult} handler is defined for the \texttt{MandelFinishedTask}, shown in \FigureCode \ref{chapter:ftdag:code:mandel-finished-handler}. When the \texttt{MandelFinishedTask} result is sent back to the client this handler is inovked, and this handler is guaranteed to only be invoked after all other \texttt{MandelTask} results have been sent back because it is dependent upon all of those tasks first having been executed. At this point, it is known the full new Mandelbrot image is returned and a new one can be generated.
+
+\begin{code}[caption={\texttt{MandelFinishedTask} Handler}, label=chapter:ftdag:code:mandel-finished-handler]
+void FaultTolerantApp::processMandelFinishedResult(
+  ServerID_t serverId)
+{
+  Messages::MandelFinishedResultMessage taskResult;
+  taskResult.read(m_servers.get(serverId)->socket);
+
+  if (TaskRequestQueue::instance()->finalizeTask(
+    taskResult.getTaskId(), true, true))
+  {
+    m_mandelbrot->processMandelFinishedResult(taskResult);
+  }
+}
+\end{code}
+
+The code for this handler follows the familiar pattern already established in the previous chapter. First step is to finish reading the message, the next step is to finalize the task, and the final step is to do something application specific based upon the result. In this case, the application specific code is to call back into the \texttt{Mandelbrot} class to let it know the full image is complete. At this point, the \texttt{Mandelbrot} code sets the \texttt{m\_inUpdate} flag to \texttt{false}, which allows another set of Mandelbrot computation tasks to be generated when necessary.
+
+Having this new task added removes the need for the member variables in the \texttt{Mandelbrot} class to track how many tasks were sent, received, and constantly checking them to see if the correct number have been returned. Instead, that accounting is implicit information contained in the graph representation of the Mandelbrot tasks. When the \texttt{MandelFinishedTask} result shows up, that is the signal the full image is complete, no other accounting is necessary.
+
+\section{Complex Demonstration}\label{chapter:ftdag:demo:complex}
+
+This section provides an example that hints at the kind of complexity supported by this framework, it demonstrates the creation of a non-trivial task dependency graph. The diagram in \FigureGeneral \ref{chapter:ftdag:figure:demonstration} shows a graph of tasks and their dependencies. The tasks at the top of the graph (8 through 15) have no dependencies and therefore, can be computed in any order. The second level of tasks (4 through 7) have dependencies on the first level of tasks, this continues through the third level. Next, task 1 shows dependencies on tasks 2 and 3, which have cascading dependencies on all other tasks, meaning that task 1 can only be computed after all other tasks above it in the graph have completed their execution. Once task 1 has completed its execution, tasks 16 and 17 can compute in parallel, and this continues until the last row of tasks (22 through 29) are free from dependencies and can compute in parallel.
+
+%
+% Good tkz-graph reference: http://mirror.hmc.edu/ctan/macros/latex/contrib/tkz/tkz-graph/doc/tkz-graph-screen.pdf
+%
+\begin{figure}[width=4.5in, height=4.5in]
+	\centering
+		\begin{tikzpicture}[scale=0.8]
+			\tikzstyle{VertexStyle} = [shape = ellipse, minimum size = 8mm, draw]
+			\tikzstyle{EdgeStyle}   = [->,>=stealth']
+			\SetGraphUnit{2}
+			%\draw[help lines] (0,0) grid (14,7);
+			\Vertex[x=7, y=3]{1}
+			\Vertex[x=3, y=4]{2} \Vertex[x=11, y=4]{3}
+			\Vertex[x=1, y=5]{4} \Vertex[x=5, y=5]{5} \Vertex[x=9, y=5]{6} \Vertex[x=13, y=5]{7}
+			\Vertex[x=0, y=6]{8} \Vertex[x=2, y=6]{9} \Vertex[x=4, y=6]{10} \Vertex[x=6, y=6]{11}
+			\Vertex[x=8, y=6]{12} \Vertex[x=10, y=6]{13} \Vertex[x=12, y=6]{14} \Vertex[x=14, y=6]{15}
+			
+			\Edges(1,3,7,15) \Edges(3,6,13) \Edges(6,12) \Edges(7,14)
+			\Edges(1,2,4,8) \Edges(2,5,11) \Edges(5,10) \Edges(4,9)
+			
+			\Vertex[x=3, y=2]{16} \Vertex[x=11, y=2]{17}
+			\Vertex[x=1, y=1]{18} \Vertex[x=5, y=1]{19} \Vertex[x=9, y=1]{20} \Vertex[x=13, y=1]{21}
+			\Vertex[x=0, y=0]{22} \Vertex[x=2, y=0]{23} \Vertex[x=4, y=0]{24} \Vertex[x=6, y=0]{25}
+			\Vertex[x=8, y=0]{26} \Vertex[x=10, y=0]{27} \Vertex[x=12, y=0]{28} \Vertex[x=14, y=0]{29}
+			
+			\Edges(22,18,16,1) \Edges(24,19,16) \Edges(23,18) \Edges(25,19)
+			\Edges(29,21,17,1) \Edges(27,20,17) \Edges(26,20) \Edges(28,21)
+			
+		\end{tikzpicture}
+	\caption{Complex DAG}\label{chapter:ftdag:figure:demonstration}
+\end{figure}
+
+%
+% tikz references:
+%    http://www.texample.net/
+%    http://sourceforge.net/projects/pgf/
+%    http://www.bu.edu/math/files/2013/08/tikzpgfmanual.pdf
+
+%\begin{figure}
+%	\centering
+%		\begin{tikzpicture}
+%			\tikzstyle{edge from parent}=[->, >=stealth', thick, draw]
+%			\tikzstyle{every node}=[circle, draw, minimum size=8mm]
+%			\tikzstyle{level 1}=[sibling distance=60mm]
+%			\tikzstyle{level 2}=[sibling distance=30mm]
+%			\tikzstyle{level 3}=[sibling distance=15mm]
+%			\tikzstyle{level 4}=[sibling distance=8mm]
+%			\node (v1) {1} [grow=up]
+%				child {node {2}
+%					child {node {4}
+%						child {node {8}}
+%						child {node {9}}
+%					}
+%					child {node {5}
+%						child {node {10}}
+%						child {node {11}}
+%					}
+%				}
+%				child {node {3}
+%					child {node {6}
+%						child {node {12}}
+%						child {node {13}}
+%					}
+%					child {node {7}
+%						child {node {14}}
+%						child {node {15}}
+%					}
+%				};
+%		\end{tikzpicture}
+%	\caption{Tree DAG}\label{chapter:ftdag:task-tree-figure}
+%\end{figure}
+
+The code involved in creating this task graph is relatively straightforward, following the pattern we know by now. The first step involved writing a new task class for the demonstration. The next step was to create the two messages used to send the task to a compute server and return the results back to the client. Finally, some application code was written to define the relationships among the tasks.
+
+The task class for this demonstration is named \texttt{DAGExampleTask}, its class declaration is found in \FigureCode \ref{chapter:ftdag:code:dag-example-task}. This code should be quite familiar by now. The only items of note are the \texttt{name} constructor parameter and the private data member \texttt{m\_name}. When an instance of this task is created, it is given a \texttt{std::string} name that is sent to the compute server and returned as part of the result, allowing the application to report to the console the name of the task results just received.
+
+\begin{code}[caption={\texttt{DAGExampleTask} Class}, label=chapter:ftdag:code:dag-example-task]
+class DAGExampleTask : public Task
+{
+public:
+  DAGExampleTask(std::string name) :
+  Task(std::chrono::milliseconds(5000)),
+    m_name(name)
+  {
+  }
+
+  DAGExampleTask(std::shared_ptr<ip::tcp::socket> 
+    socket,
+    Messages::DAGExampleMessage& message) :
+    Task(socket, message.getTaskId()),
+    m_name(message.m_name)
+  {
+  }
+
+  virtual void execute() override;
+
+protected:
+  virtual std::shared_ptr<Messages::Message> getMessage() override;
+  virtual std::shared_ptr<Messages::Message> 
+    completeCustom(boost::asio::io_service& ioService) override;
+
+private:
+  std::string m_name;
+};
+\end{code}
+
+The \texttt{DAGExampleTask} doesn't perform any real computation, instead it sleeps for 4 seconds, as shown in \FigureCode \ref{chapter:ftdag:code:dag-example-execute}. The reason for having the execution sleep for this amount of time is to give time for one to progressively watch the results returned and displayed to the console. Note back in \FigureCode \ref{chapter:ftdag:code:dag-example-task} this \texttt{DAGExampleTask} constructor is defined to have a fault-tolerant timeout of 5 seconds (5000 milliseconds), 1 second longer than the execution. For any reason, if you change the execution sleep period, make sure to adjust the fault-tolerant timeout to be longer than the sleep.
+
+\begin{code}[caption={\texttt{DAGExampleTask} Execution}, label=chapter:ftdag:code:dag-example-execute]
+void DAGExampleTask::execute()
+{
+  std::this_thread::sleep_for(std::chrono::milliseconds(4000));
+}
+\end{code}
+
+Once the results for a \texttt{DAGExampleTask} are returned to the client, the \texttt{processDAGExampleResult} method is invoked, as shown in \FigureCode \ref{chapter:ftdag:code:results-handler}. The only thing the handler does is to report the name of the task to the console.
+
+\begin{code}[caption={\texttt{DAGExampleTask} Results Handler}, label=chapter:ftdag:code:results-handler]
+void FaultTolerantApp::processDAGExampleResult(
+  ServerID_t serverId)
+{
+  Messages::DAGExampleResultMessage taskResult;
+  taskResult.read(m_servers.get(serverId)->socket);
+
+  if (TaskRequestQueue::instance()->finalizeTask(
+    taskResult.getTaskId(), true, true))
+  {
+    std::cout << "DAG Example Task: " << taskResult.getName() << std::endl;
+  }
+}
+\end{code}
+
+The big question is, with such a simple interface for adding tasks, how can such a complex dependency graph as shown in \FigureGeneral \ref{chapter:ftdag:figure:demonstration} get defined. It turns out to be quite easy, refer to the code in \FigureCode \ref{chapter:ftdag:code:adding-tasks} to see how it is done.
+
+\begin{code}[caption={Defining Task Dependencies}, label=chapter:ftdag:code:adding-tasks]
+TaskRequestQueue::instance()->beginGroup();
+
+auto task1 = std::make_shared<Tasks::DAGExampleTask>("1");
+auto task2 = std::make_shared<Tasks::DAGExampleTask>("2");
+auto task3 = std::make_shared<Tasks::DAGExampleTask>("3");
+auto task4 = std::make_shared<Tasks::DAGExampleTask>("4");
+auto task5 = std::make_shared<Tasks::DAGExampleTask>("5");
+auto task6 = std::make_shared<Tasks::DAGExampleTask>("6");
+auto task7 = std::make_shared<Tasks::DAGExampleTask>("7");
+auto task8 = std::make_shared<Tasks::DAGExampleTask>("8");
+auto task9 = std::make_shared<Tasks::DAGExampleTask>("9");
+auto task10 = std::make_shared<Tasks::DAGExampleTask>("10");
+auto task11 = std::make_shared<Tasks::DAGExampleTask>("11");
+auto task12 = std::make_shared<Tasks::DAGExampleTask>("12");
+auto task13 = std::make_shared<Tasks::DAGExampleTask>("13");
+auto task14 = std::make_shared<Tasks::DAGExampleTask>("14");
+auto task15 = std::make_shared<Tasks::DAGExampleTask>("15");
+
+ ...
+
+TaskRequestQueue::instance()->enqueueTask(task2, task1);
+TaskRequestQueue::instance()->enqueueTask(task3, task1);
+TaskRequestQueue::instance()->enqueueTask(task4, task2);
+TaskRequestQueue::instance()->enqueueTask(task5, task2);
+TaskRequestQueue::instance()->enqueueTask(task6, task3);
+TaskRequestQueue::instance()->enqueueTask(task7, task3);
+TaskRequestQueue::instance()->enqueueTask(task8, task4);
+TaskRequestQueue::instance()->enqueueTask(task9, task4);
+TaskRequestQueue::instance()->enqueueTask(task10, task5);
+TaskRequestQueue::instance()->enqueueTask(task11, task5);
+TaskRequestQueue::instance()->enqueueTask(task12, task6);
+TaskRequestQueue::instance()->enqueueTask(task13, task6);
+TaskRequestQueue::instance()->enqueueTask(task14, task7);
+TaskRequestQueue::instance()->enqueueTask(task15, task7);
+
+TaskRequestQueue::instance()->endGroup();
+\end{code}
+
+The code in this listing shows the definition of the tasks in the top half of the example shown in \FigureGeneral \ref{chapter:ftdag:figure:demonstration} to reduce the length of the listing in the book; the full code is available as part of the source code for the book. The first part of the code is to create the different tasks that are part of the dependency graph, no dependencies are defined at this point. The next step is to add tasks and define the dependencies as they are added to the \texttt{TaskRequestQueue}.
+
+The order in which tasks and their dependencies are added does not matter, as is seen in this code. The first two tasks added are \texttt{task2} and \texttt{task1}. The call using \texttt{enqueueTask(task2, task1)} identifies \texttt{task1} as being dependent upon the completion of \texttt{task2}. The next call using \texttt{enqueueTask(task3, task1)} identifies \texttt{task1} as being dependent upon the completion of \texttt{task2}. At this point, we have identified \texttt{task1} and being dependent upon \texttt{task2} and \texttt{task3}. It is okay that \texttt{task1} is used in two different calls to \texttt{enqueueTask}. It doesn't mean that \texttt{task1} will be computed twice, it is still only added once, but the additional dependency relationship between the two tasks is added. Once a task is added to the framework, any subsequent \texttt{enqueueTask} calls refering to the same task do not result in duplicating the task. The framework recognizes the task by its unique identifier and guarantees it exists only once.
+
+After tasks 1, 2, and 3 are added, the process continues from the middle of the graph up to the top, finishing with the top row of tasks, tasks 8 through 15. When the call using \texttt{enqueueTask(task4, task2)} is made, it defines that \texttt{task4} must complete before \texttt{task2}. Because of the existing dependency between \texttt{task2} and \texttt{task1}, we are guaranteed that \texttt{task1} will only execute after \texttt{task2} and \texttt{task3}.
+
+The order in which the task dependencies are made does not matter. The code in \FigureCode \ref{chapter:ftdag:code:adding-tasks} for enqueuing the tasks can be reversed and the same graph and order of execution will occur; in fact, any ordering of the \texttt{enqueueTask} calls creates a correct graph definition.
+
+With all of this code in place, it is time to run the application and see the results.  The output shown in \FigureConsole \ref{chapter:ftdag:console:demonstration} comes from an example run on my computer using the graph from \FigureGeneral \ref{chapter:ftdag:figure:demonstration}. In looking through it, you can see the tasks at one level all finish before any tasks in the next level of the graph finish. Watching it in real time, the following groups complete in order: (12, 15, 14, 8, 9, 10, 11, 13), (7, 6, 5, 4), (3, 2), (1), (17, 16), (19, 20, 18, 21), (27, 29, 22, 28, 26, 25, 24, 23).
+
+\begin{console}[caption={Demonstration Output}, label=chapter:ftdag:console:demonstration]
+DAG Example Task: 12
+DAG Example Task: 15
+DAG Example Task: 14
+DAG Example Task: 8
+DAG Example Task: 9
+DAG Example Task: 10
+DAG Example Task: 11
+DAG Example Task: 13
+DAG Example Task: 7
+DAG Example Task: 6
+DAG Example Task: 5
+DAG Example Task: 4
+DAG Example Task: 2
+DAG Example Task: 3
+DAG Example Task: 1
+DAG Example Task: 17
+DAG Example Task: 16
+DAG Example Task: 19
+DAG Example Task: 20
+DAG Example Task: 18
+DAG Example Task: 21
+DAG Example Task: 27
+DAG Example Task: 29
+DAG Example Task: 22
+DAG Example Task: 28
+DAG Example Task: 26
+DAG Example Task: 25
+DAG Example Task: 24
+DAG Example Task: 23
+\end{console}
+
+Remember that while the tasks in this graph are being executed, it is possible to manipulate the Mandelbrot view, with those tasks being executed (and completed) in parallel on the other available distributed CPU cores. Additionally, for this demonstration I have commented out the prime number computation, but it could be added back in and all types of tasks can be executed in parallel, while still having the correct dependencies occuring, in addition to gracefully handling any server failures through the fault-tolerant component of the framework.
+
+\section{Summary}
+
+The work presented in this chapter represents the end of a long progression made through this book. The framework presented in this chapter is a sophisticated system, one that meets and actually exceeds the original stated purpose for the book. With this framework we now have a scalable, distributed, and fault-tolerant system. Additionally, we have two different ways of ordering tasks. From Chapter \ref{chapter:ft} the tasks may be ordered by priority, and this chapter adds the ability to define complex dependency relationships among tasks. I also like to think the code for providing these powerful capabilities is straightforward and understandable, not having unnecessary complexity, thereby making it within the grasp of as wide an audience as possible.

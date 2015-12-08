@@ -1,0 +1,11 @@
+Build
+/tmp
+Dist-Systems.pdf
+*.gz
+*.sdf
+*.suo
+*.aux
+*.opensdf
+*.user
+*.cpp~
+*.txt~

@@ -1,6 +1,5 @@
 Build
 tmp
-Dist-Systems.pdf
 *.gz
 *.sdf
 *.suo

@@ -1,0 +1,9 @@
+package PBMessages;
+
+message MandelResult
+{
+	required uint64 taskId = 1;
+	required uint32 startRow = 2;
+	required uint32 endRow = 3;
+	repeated uint32 pixel = 4 [packed = true];
+}

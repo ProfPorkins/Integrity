@@ -1,0 +1,6 @@
+package PBMessages;
+
+message MandelFinished
+{
+	required uint64 taskId = 1;
+}

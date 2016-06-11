@@ -1,0 +1,6 @@
+package sample;
+
+message Line {
+  required string message = 1;
+  required uint32 line = 2;
+}

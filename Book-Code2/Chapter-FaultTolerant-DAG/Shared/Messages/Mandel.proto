@@ -1,0 +1,14 @@
+package PBMessages;
+
+message Mandel
+{
+	required uint64 taskId = 1;
+	required uint32 startRow = 2;
+	required uint32 endRow = 3;
+	required uint32 sizeX = 4;
+	required double startX = 5;
+	required double startY = 6;
+	required double deltaX = 7;
+	required double deltaY = 8;
+	required uint32 maxIterations = 9;
+}

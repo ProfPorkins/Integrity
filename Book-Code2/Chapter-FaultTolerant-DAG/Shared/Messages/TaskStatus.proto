@@ -1,0 +1,13 @@
+package PBMessages;
+
+message TaskStatus
+{
+	required uint64 taskId = 1;
+	enum Status
+	{
+		Active = 0;
+		Cancelled = 1;
+		Fault = 2;
+	}
+	required Status status = 2 [default = Active];
+}
